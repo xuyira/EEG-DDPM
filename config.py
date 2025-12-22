@@ -54,7 +54,7 @@ class TrainingConfig:
     
     def __post_init__(self):
         if self.subjects is None:
-            self.subjects = [1, 2] #, 3, 4, 5, 6, 7, 8, 9
+            self.subjects = [1, 2, 3, 4, 5, 6, 7, 8, 9]
         
         # 设置输出目录
         self.output_dir = str(Path(self.output_dir) / f"sub{self.leave_sub}")

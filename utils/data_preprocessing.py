@@ -12,6 +12,7 @@ import gc
 from tqdm import tqdm
 from abc import ABC, abstractmethod
 import torch
+import matplotlib.pyplot as plt
 
 def load_mat_T(root: Path, sub: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -255,8 +256,8 @@ class DelayEmbedder(TsImgEmbedder):
         self.img_shape = (batch, features, self.embedding, i)
         x_image = x_image.to(self.device)[:, :, :, :i]
 
-        if pad:
-            x_image = self.pad_to_square(x_image, mask)
+        #if pad:
+            #x_image = self.pad_to_square(x_image, mask)
 
         return x_image
 
