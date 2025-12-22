@@ -10,6 +10,8 @@ import scipy.io
 import pywt
 import gc
 from tqdm import tqdm
+from abc import ABC, abstractmethod
+import torch
 
 def load_mat_T(root: Path, sub: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -126,86 +128,181 @@ def normalize_eeg(eeg):
     std = eeg.std(axis=1, keepdims=True) + 1e-8
     return (eeg - mean) / std
 
+def MinMaxScaler(data, return_scalers=False):
+    """Min Max normalizer.
 
-def eeg_to_cwt(
-    eeg,
-    fs=1000,
-    num_freqs=50,
-    fmin=1,
-    fmax=50,
-    wavelet='morl',
-    pbar=None  # 可选的进度条对象（用于显示总进度）
-):
+    Args:
+      - data: original data
+
+    Returns:
+      - norm_data: normalized data
     """
-    eeg: (b, T, C)
-    return: (b, C, num_freqs, T)
+    min = np.min(data, 0)
+    max = np.max(data, 0)
+    numerator = data - np.min(data, 0)
+    denominator = np.max(data, 0) - np.min(data, 0)
+    norm_data = numerator / (denominator + 1e-7)
+    if return_scalers:
+        return norm_data, min, max
+    return norm_data
+
+
+def MinMaxArgs(data, min, max):
+    """
+    Args:
+        data: given data
+        min: given min value
+        max: given max value
+
+    Returns:
+        min-max scaled data by given min and max
+    """
+    numerator = data - min
+    denominator = max - min
+    norm_data = numerator / (denominator + 1e-7)
+    return norm_data
+
+class TsImgEmbedder(ABC):
+    """
+    Abstract class for transforming time series to images and vice versa
     """
 
-    b, T, C = eeg.shape
+    def __init__(self, device, seq_len):
+        self.device = device
+        self.seq_len = seq_len
 
-    # 归一化
-    eeg = normalize_eeg(eeg)
+    @abstractmethod
+    def ts_to_img(self, signal):
+        """
 
-    # 生成频率 → scale 映射
-    freqs = np.linspace(fmin, fmax, num_freqs)
-    scales = pywt.central_frequency(wavelet) * fs / freqs
+        Args:
+            signal: given time series
 
-    cwt_data = np.zeros((b, C, num_freqs, T), dtype=np.float32)
+        Returns:
+            image representation of the signal
 
-    # 如果没有传入进度条，创建局部进度条
-    if pbar is None:
-        total_tasks = b * C
-        pbar = tqdm(total=total_tasks, desc="CWT转换", unit="通道")
-        local_pbar = True
-    else:
-        local_pbar = False
+        """
+        pass
 
-    try:
-        for i in range(b):
-            for ch in range(C):
-                coef, _ = pywt.cwt(
-                    eeg[i, :, ch],
-                    scales=scales,
-                    wavelet=wavelet
-                )
-                # coef: (num_freqs, T)
-                cwt_data[i, ch] = coef.real  # 通常取实部
-                if pbar is not None:
-                    pbar.update(1)  # 更新进度条
-    finally:
-        if local_pbar:
-            pbar.close()
+    @abstractmethod
+    def img_to_ts(self, img):
+        """
 
-    return cwt_data
+        Args:
+            img: given generated image
+
+        Returns:
+            time series representation of the generated image
+        """
+        pass
+
+
+class DelayEmbedder(TsImgEmbedder):
+    """
+    Delay embedding transformation
+    """
+
+    def __init__(self, device, seq_len, delay, embedding):
+        super().__init__(device, seq_len)
+        self.delay = delay
+        self.embedding = embedding
+        self.img_shape = None
+
+    def pad_to_square(self, x, mask=0):
+        """
+        Pads the input tensor x to make it square along the last two dimensions.
+        """
+        _, _, cols, rows = x.shape
+        max_side = max(cols, rows)
+        padding = (
+            0, max_side - rows, 0, max_side - cols)  # Padding format: (pad_left, pad_right, pad_top, pad_bottom)
+
+        # Padding the last two dimensions to make them square
+        x_padded = torch.nn.functional.pad(x, padding, mode='constant', value=mask)
+        return x_padded
+
+    def unpad(self, x, original_shape):
+        """
+        Removes the padding from the tensor x to get back to its original shape.
+        """
+        _, _, original_cols, original_rows = original_shape
+        return x[:, :, :original_cols, :original_rows]
+
+    def ts_to_img(self, signal, pad=True, mask=0):
+
+        batch, length, features = signal.shape
+        #  if our sequences are of different lengths, this can happen with physionet and climate datasets
+        if self.seq_len != length:
+            self.seq_len = length
+
+        x_image = torch.zeros((batch, features, self.embedding, self.embedding))
+        i = 0
+        while (i * self.delay + self.embedding) <= self.seq_len:
+            start = i * self.delay
+            end = start + self.embedding
+            x_image[:, :, :, i] = signal[:, start:end].permute(0, 2, 1)
+            i += 1
+
+        ### SPECIAL CASE
+        if i * self.delay != self.seq_len and i * self.delay + self.embedding > self.seq_len:
+            start = i * self.delay
+            end = signal[:, start:].permute(0, 2, 1).shape[-1]
+            # end = start + (self.embedding - 1) - missing_vals
+            x_image[:, :, :end, i] = signal[:, start:].permute(0, 2, 1)
+            i += 1
+
+        # cache the shape of the image before padding
+        self.img_shape = (batch, features, self.embedding, i)
+        x_image = x_image.to(self.device)[:, :, :, :i]
+
+        if pad:
+            x_image = self.pad_to_square(x_image, mask)
+
+        return x_image
+
+    def img_to_ts(self, img):
+        img_non_square = self.unpad(img, self.img_shape)
+
+        batch, channels, rows, cols = img_non_square.shape
+
+        reconstructed_x_time_series = torch.zeros((batch, channels, self.seq_len))
+
+        for i in range(cols - 1):
+            start = i * self.delay
+            end = start + self.embedding
+            reconstructed_x_time_series[:, :, start:end] = img_non_square[:, :, :, i]
+
+        ### SPECIAL CASE
+        start = (cols - 1) * self.delay
+        end = reconstructed_x_time_series[:, :, start:].shape[-1]
+        reconstructed_x_time_series[:, :, start:] = img_non_square[:, :, :end, cols - 1]
+        reconstructed_x_time_series = reconstructed_x_time_series.permute(0, 2, 1)
+
+        return reconstructed_x_time_series.cuda()
 
 def bci2a_preprcessing_method(
     root: Path,
     leave_sub: int,
     subjects: Iterable[int],
-    fs: int = 1000,
-    num_freqs: int = 50,
-    fmin: float = 1,
-    fmax: float = 50,
-    wavelet: str = 'morl',
-    cwt_batch_size: int = None,
+    delay: int,
+    embedding: int,
+    device: str = "cpu",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    对留一受试者（LOSO）的训练数据进行预处理：生成 NPY 文件并进行 CWT 变换。
-    
+    对留一受试者（LOSO）的训练数据进行预处理：
+    先生成合并后的 NPY，再通过 DelayEmbedder.ts_to_img 将时序信号转成图片。
+
     参数：
         root: mat 文件所在目录
         leave_sub: 留出的受试者编号（1-9）
         subjects: 所有受试者编号列表
-        fs: 采样频率，默认 1000
-        num_freqs: CWT 频率数量，默认 50
-        fmin: 最小频率，默认 1
-        fmax: 最大频率，默认 50
-        wavelet: 小波类型，默认 'morl'
-        cwt_batch_size: CWT 转换批次大小（用于减少内存占用，None 表示不分批）
-    
+        delay: 延迟嵌入的步长（DelayEmbedder 的 delay）
+        embedding: 延迟嵌入的维度（DelayEmbedder 的 embedding）
+        device: 运行 DelayEmbedder 的设备字符串，例如 "cpu" 或 "cuda"
+
     返回：
-        (cwt_data, label, sub): 
-            cwt_data: (B_total, C, num_freqs, T) 归一化后的 CWT 数据
+        (img_data, label, sub): 
+            img_data: (B_total, C, H, W) 由 DelayEmbedder 生成并按需要补成方形的图像
             label: (B_total,) 标签数组，值为 0..3
             sub: (B_total,) 受试者编号数组，值为 0-8
     """
@@ -213,67 +310,40 @@ def bci2a_preprcessing_method(
     eeg_data, merged_labels, merged_subs = build_loso_train_npy(
         root, leave_sub, subjects
     )
-    
-    # eeg_data 形状为 (B_total, 1000, 22)
+
+    # eeg_data 形状为 (B_total, T, C)
     B_total, T, C = eeg_data.shape
-    print(f"\n准备进行 CWT 变换，数据形状: {eeg_data.shape} (B_total={B_total}, T={T}, C={C})")
-    
-    # 2. 调用 eeg_to_cwt 进行 CWT 变换
-    # eeg_to_cwt 输入: (b, T, C)，输出: (b, C, num_freqs, T)
-    print(f"\n进行 CWT 变换...")
-    print(f"  参数: fs={fs}, num_freqs={num_freqs}, fmin={fmin}, fmax={fmax}, wavelet={wavelet}")
-    
-    # 如果设置了 cwt_batch_size，则分批处理
-    if cwt_batch_size is not None and cwt_batch_size < B_total:
-        print(f"  使用分批处理，批次大小: {cwt_batch_size} 样本/批次")
-        # 预分配输出数组
-        cwt_data = np.zeros((B_total, C, num_freqs, T), dtype=np.float32)
-        
-        # 创建总进度条（显示所有通道的总进度）
-        total_channels = B_total * C
-        pbar = tqdm(total=total_channels, desc="CWT转换（总进度）", unit="通道")
-        
-        # 分批处理
-        num_batches = (B_total + cwt_batch_size - 1) // cwt_batch_size
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * cwt_batch_size
-            end_idx = min(start_idx + cwt_batch_size, B_total)
-            batch_size_actual = end_idx - start_idx  # 实际批次大小（最后一批可能小于 cwt_batch_size）
-            batch_data = eeg_data[start_idx:end_idx]
-            
-            print(f"\n  批次 {batch_idx + 1}/{num_batches}: 处理样本 {start_idx} 到 {end_idx - 1} (共 {batch_size_actual} 个样本, {batch_size_actual * C} 个通道)")
-            batch_cwt = eeg_to_cwt(
-                batch_data,
-                fs=fs,
-                num_freqs=num_freqs,
-                fmin=fmin,
-                fmax=fmax,
-                wavelet=wavelet,
-                pbar=pbar  # 传入总进度条
-            )
-            cwt_data[start_idx:end_idx] = batch_cwt
-            
-            # 释放批次数据内存
-            del batch_data, batch_cwt
-            gc.collect()
-        
-        pbar.close()
-    else:
-        # 一次性处理所有数据
-        cwt_data = eeg_to_cwt(
-            eeg_data,
-            fs=fs,
-            num_freqs=num_freqs,
-            fmin=fmin,
-            fmax=fmax,
-            wavelet=wavelet
-        )
-    
-    # 删除原始 eeg_data 以释放内存
-    del eeg_data
+    print(
+        f"\n准备进行 DelayEmbedder 变换，数据形状: {eeg_data.shape} "
+        f"(B_total={B_total}, T={T}, C={C})"
+    )
+    print(f"  DelayEmbedder 参数: delay={delay}, embedding={embedding}, device={device}")
+
+    # 2. 归一化 (与 CWT 前相同的 z-score 归一化策略)
+    eeg_data_norm = normalize_eeg(eeg_data)
+
+    # 3. 转为 tensor 并移动到指定设备
+    eeg_tensor = torch.from_numpy(eeg_data_norm).float().to(device)
+
+    # 4. 使用 DelayEmbedder 将时序信号转为图片
+    embedder = DelayEmbedder(device=device, seq_len=T, delay=delay, embedding=embedding)
+
+    with torch.no_grad():
+        img_tensor = embedder.ts_to_img(eeg_tensor, pad=True, mask=0)  # (B, C, H, W)
+
+    # 5. 转回 numpy，并清理中间变量以节省内存
+    img_data = img_tensor.detach().cpu().numpy().astype(np.float32)
+
+    del eeg_data, eeg_data_norm, eeg_tensor, img_tensor
     gc.collect()
-    
-    print(f"[✓] CWT 变换完成，输出形状: cwt_data={cwt_data.shape}, label={merged_labels.shape}, sub={merged_subs.shape}")
-    print(f"    (B_total={cwt_data.shape[0]}, C={cwt_data.shape[1]}, num_freqs={cwt_data.shape[2]}, T={cwt_data.shape[3]})")
-    
-    return cwt_data, merged_labels, merged_subs
+
+    print(
+        f"[✓] DelayEmbedder 变换完成，输出形状: img_data={img_data.shape}, "
+        f"label={merged_labels.shape}, sub={merged_subs.shape}"
+    )
+    print(
+        f"    (B_total={img_data.shape[0]}, C={img_data.shape[1]}, "
+        f"H={img_data.shape[2]}, W={img_data.shape[3]})"
+    )
+
+    return img_data, merged_labels, merged_subs

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import torch
 
 
 @dataclass
@@ -43,8 +44,10 @@ class TrainingConfig:
     data_root: Path = Path("./standard_2a_data")
     leave_sub: int = 1
     subjects: list = None
-    # CWT 转换批次大小（用于减少内存占用，None 表示不分批）
-    cwt_batch_size: int = 200
+
+    # DelayEmbedder 参数（用于将 EEG 时序信号转为图片）
+    delay: int = 15
+    embedding: int = 64
     
     # 输出目录
     pic_dir: str = "./model_pic/DDPM/"

@@ -18,22 +18,6 @@ from model import create_unet_model
 from utils.train import train_loop
 from utils.data_preprocessing import bci2a_preprcessing_method
 
-def transform_image(img, image_size):
-    """
-    图像预处理，调整尺寸
-    使用 F.interpolate 代替 transforms.Resize，更高效且支持 4D tensor
-    """
-    # img shape: (B, C, H, W)
-    # 使用双线性插值调整尺寸
-    img_resized = F.interpolate(
-        img, 
-        size=image_size, 
-        mode='bilinear', 
-        align_corners=False
-    )
-    return img_resized
-
-
 def main():
     """主函数"""
     # 创建配置（目录会在 __post_init__ 中自动创建）
@@ -42,36 +26,34 @@ def main():
     print("图片输出文件夹：", config.pic_dir)
     print("模型输出文件夹：", config.output_dir)
     
-    # 数据预处理
-    print("\n开始数据预处理...")
-    X_train_cwt_norm, X_train_label, X_train_sub = bci2a_preprcessing_method(
+    # 选择运行设备
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"使用设备: {device}")
+
+    # 数据预处理（使用 DelayEmbedder 将 EEG 时序信号转成图片）
+    print("\n开始数据预处理（DelayEmbedder）...")
+    X_train_img_np, X_train_label, X_train_sub = bci2a_preprcessing_method(
         root=config.data_root,
         leave_sub=config.leave_sub,
         subjects=config.subjects,
-        cwt_batch_size=config.cwt_batch_size  # 传递 CWT 批次大小参数
+        delay=config.delay,
+        embedding=config.embedding,
+        device=device,
     )
 
-    # 转换为 tensor，(B, C, num_freqs, T)
+    # 转换为 tensor，(B, C, H, W)
     print("转换为 tensor...")
-    X_train_cwt_norm_tensor = torch.from_numpy(X_train_cwt_norm).float()
+    X_train_img = torch.from_numpy(X_train_img_np).float()
     # 删除 numpy 数组以释放内存
-    del X_train_cwt_norm
+    del X_train_img_np
     gc.collect()  # 强制垃圾回收
-    print("数据维度：", X_train_cwt_norm_tensor.shape)
-    
-    # 图像预处理，调整尺寸
-    print("调整图像尺寸...")
-    X_train_cwt_norm = transform_image(X_train_cwt_norm_tensor, config.image_size)
-    # 删除原始 tensor 以释放内存
-    del X_train_cwt_norm_tensor
-    gc.collect()
-    print("调整尺寸后的维度：", X_train_cwt_norm.shape)
+    print("数据维度：", X_train_img.shape)
     
     # 可视化一个样本
     show_trial = 0
     show_channel = 0
     plt.figure()
-    plt.imshow(X_train_cwt_norm[show_trial, show_channel, :, :].numpy(), aspect='auto')
+    plt.imshow(X_train_img[show_trial, show_channel, :, :].numpy(), aspect='auto')
     plt.colorbar()
     plt.title("Normalized EEG Signal after transform trial{} channel{}".format(show_trial, show_channel))
     plt.savefig(f"{config.pic_dir}/sample_transpic_trial{show_trial}_channel{show_channel}.png", dpi=300)
@@ -82,13 +64,13 @@ def main():
     model = create_unet_model(config)
     
     # 测试模型输入输出
-    sample_image = X_train_cwt_norm[0].unsqueeze(0)
+    sample_image = X_train_img[0].unsqueeze(0)
     print("输入图像维度：", sample_image.shape)
     print("输出维度：", model(sample_image, timestep=0).sample.shape)
     
     # 创建数据加载器
     train_dataloader = DataLoader(
-        X_train_cwt_norm, 
+        X_train_img, 
         batch_size=config.train_batch_size, 
         shuffle=True
     )
