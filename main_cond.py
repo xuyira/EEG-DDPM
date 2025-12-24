@@ -14,9 +14,10 @@ import gc
 from diffusers.optimization import get_cosine_schedule_with_warmup
 
 from config import TrainingConfig
-from model import create_unet_model
-from utils.train import train_loop
+from model import ClassConditionedUnet
+from utils.train import train_loop_conditional
 from utils.data_preprocessing import bci2a_preprcessing_method
+from torch.utils.data import TensorDataset
 
 def main():
     """主函数"""
@@ -59,18 +60,28 @@ def main():
     plt.savefig(f"{config.pic_dir}/sample_transpic_trial{show_trial}_channel{show_channel}.png", dpi=300)
     plt.close()
     
-    # 创建模型
-    print("\n创建模型...")
-    model = create_unet_model(config)
+    # 创建条件模型
+    print("\n创建条件模型...")
+    model = ClassConditionedUnet(config, num_classes=4, class_emb_size=4)
+    model = model.to(device)
     
     # 测试模型输入输出
-    sample_image = X_train_img[0].unsqueeze(0)
+    sample_image = X_train_img[0].unsqueeze(0).to(device)
+    sample_label = torch.tensor([X_train_label[0]], device=device)
     print("输入图像维度：", sample_image.shape)
-    print("输出维度：", model(sample_image, timestep=0).sample.shape)
+    print("输入标签：", sample_label.item())
+    with torch.no_grad():
+        output = model(sample_image, torch.tensor([0], device=device), sample_label, return_dict=False)
+    print("输出维度：", output.shape)
     
-    # 创建数据加载器
+    # 创建数据加载器（包含图像和标签）
+    # 将标签转换为 tensor
+    X_train_label_tensor = torch.from_numpy(X_train_label).long()
+    
+    # 创建 TensorDataset，包含图像和标签
+    train_dataset = TensorDataset(X_train_img, X_train_label_tensor)
     train_dataloader = DataLoader(
-        X_train_img, 
+        train_dataset,
         batch_size=config.train_batch_size, 
         shuffle=True
     )
@@ -86,9 +97,9 @@ def main():
         num_training_steps=(len(train_dataloader) * config.num_epochs),
     )
     
-    # 开始训练
-    print("\n开始训练...")
-    train_loop(
+    # 开始训练（条件生成）
+    print("\n开始条件训练...")
+    train_loop_conditional(
         config=config,
         model=model,
         noise_scheduler=noise_scheduler,

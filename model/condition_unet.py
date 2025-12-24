@@ -1,110 +1,74 @@
-class ClassConditionedUnet(nn.Module):
-    def __init__(self, num_classes=10, class_emb_size=4):
-        super().__init__()
+import torch
+import torch.nn as nn
+from diffusers import UNet2DModel
 
-        # The embedding layer will map the class label to a vector of size class_emb_size
+
+class ClassConditionedUnet(nn.Module):
+    """
+    条件 UNet 模型，使用类别标签作为条件
+    用于 EEG 数据的条件生成（4个类别：0-3）
+    """
+    def __init__(self, config, num_classes=4, class_emb_size=4):
+        super().__init__()
+        
+        self.num_classes = num_classes
+        self.class_emb_size = class_emb_size
+        
+        # 类别嵌入层：将类别标签映射到嵌入向量
         self.class_emb = nn.Embedding(num_classes, class_emb_size)
 
-        # Self.model is an unconditional UNet with extra input channels to accept the conditioning information (the class embedding)
+        # UNet 模型，输入通道数增加 class_emb_size 以接受条件信息
         self.model = UNet2DModel(
-            sample_size=28,  # the target image resolution
-            in_channels=1 + class_emb_size,  # Additional input channels for class cond.
-            out_channels=1,  # the number of output channels
-            layers_per_block=2,  # how many ResNet layers to use per UNet block
-            block_out_channels=(32, 64, 64),
+            sample_size=config.image_size,  # 目标图像分辨率
+            in_channels=config.unet_in_channels + class_emb_size,  # 额外输入通道用于类别条件
+            out_channels=config.unet_out_channels,  # 输出通道数
+            layers_per_block=config.unet_layers_per_block,  # 每个 UNet block 中的 ResNet 层数
+            block_out_channels=config.unet_block_out_channels,  # 每个 UNet block 的输出通道数
             down_block_types=(
-                "DownBlock2D",  # a regular ResNet downsampling block
-                "AttnDownBlock2D",  # a ResNet downsampling block with spatial self-attention
-                "AttnDownBlock2D",
+                "DownBlock2D",  # 常规 ResNet 下采样块
+                "DownBlock2D",
+                "DownBlock2D",
+                "DownBlock2D",
+                "AttnDownBlock2D",  # 带空间自注意力的 ResNet 下采样块
+                "DownBlock2D",
             ),
             up_block_types=(
-                "AttnUpBlock2D",
-                "AttnUpBlock2D",  # a ResNet upsampling block with spatial self-attention
-                "UpBlock2D",  # a regular ResNet upsampling block
+                "UpBlock2D",  # 常规 ResNet 上采样块
+                "AttnUpBlock2D",  # 带空间自注意力的 ResNet 上采样块
+                "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
             ),
         )
 
-    # Our forward method now takes the class labels as an additional argument
-    def forward(self, x, t, class_labels):
-        # Shape of x:
-        bs, ch, w, h = x.shape
+    def forward(self, x, timesteps, class_labels, return_dict=True):
+        """
+        前向传播
+        
+        参数:
+            x: 输入图像 (B, C, H, W)
+            timesteps: 时间步 (B,)
+            class_labels: 类别标签 (B,)
+            return_dict: 是否返回字典格式
+        
+        返回:
+            噪声预测 (B, C, H, W)
+        """
+        bs, ch, h, w = x.shape
 
-        # class conditioning in right shape to add as additional input channels
-        class_cond = self.class_emb(class_labels)  # Map to embedding dimension
-        class_cond = class_cond.view(bs, class_cond.shape[1], 1, 1).expand(bs, class_cond.shape[1], w, h)
-        # x is shape (bs, 1, 28, 28) and class_cond is now (bs, 4, 28, 28)
+        # 类别条件：将类别标签映射到嵌入维度
+        class_cond = self.class_emb(class_labels)  # (B, class_emb_size)
+        # 扩展为空间维度 (B, class_emb_size, H, W)
+        class_cond = class_cond.view(bs, self.class_emb_size, 1, 1).expand(bs, self.class_emb_size, h, w)
 
-        # Net input is now x and class cond concatenated together along dimension 1
-        net_input = torch.cat((x, class_cond), 1)  # (bs, 5, 28, 28)
+        # 将输入图像和类别条件在通道维度拼接
+        net_input = torch.cat((x, class_cond), dim=1)  # (B, C + class_emb_size, H, W)
 
-        # Feed this to the UNet alongside the timestep and return the prediction
-        return self.model(net_input, t).sample  # (bs, 1, 28, 28)
-
-# Create a scheduler
-noise_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule="squaredcos_cap_v2")
-# Redefining the dataloader to set the batch size higher than the demo of 8
-train_dataloader = DataLoader(dataset, batch_size=128, shuffle=True)
-
-# How many runs through the data should we do?
-n_epochs = 10
-
-# Our network
-net = ClassConditionedUnet().to(device)
-
-# Our loss function
-loss_fn = nn.MSELoss()
-
-# The optimizer
-opt = torch.optim.Adam(net.parameters(), lr=1e-3)
-
-# Keeping a record of the losses for later viewing
-losses = []
-
-# The training loop
-for epoch in range(n_epochs):
-    for x, y in tqdm(train_dataloader):
-
-        # Get some data and prepare the corrupted version
-        x = x.to(device) * 2 - 1  # Data on the GPU (mapped to (-1, 1))
-        y = y.to(device)
-        noise = torch.randn_like(x)
-        timesteps = torch.randint(0, 999, (x.shape[0],)).long().to(device)
-        noisy_x = noise_scheduler.add_noise(x, noise, timesteps)
-
-        # Get the model prediction
-        pred = net(noisy_x, timesteps, y)  # Note that we pass in the labels y
-
-        # Calculate the loss
-        loss = loss_fn(pred, noise)  # How close is the output to the noise
-
-        # Backprop and update the params:
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-
-        # Store the loss for later
-        losses.append(loss.item())
-
-    # Print out the average of the last 100 loss values to get an idea of progress:
-    avg_loss = sum(losses[-100:]) / 100
-    print(f"Finished epoch {epoch}. Average of the last 100 loss values: {avg_loss:05f}")
-
-# View the loss curve
-plt.plot(losses)
-# Prepare random x to start from, plus some desired labels y
-x = torch.randn(80, 1, 28, 28).to(device)
-y = torch.tensor([[i] * 8 for i in range(10)]).flatten().to(device)
-
-# Sampling loop
-for i, t in tqdm(enumerate(noise_scheduler.timesteps)):
-
-    # Get model pred
-    with torch.no_grad():
-        residual = net(x, t, y)  # Again, note that we pass in our labels y
-
-    # Update sample with step
-    x = noise_scheduler.step(residual, t, x).prev_sample
-
-# Show the results
-fig, ax = plt.subplots(1, 1, figsize=(12, 12))
-ax.imshow(torchvision.utils.make_grid(x.detach().cpu().clip(-1, 1), nrow=8)[0], cmap="Greys")
+        # 输入到 UNet 并返回预测
+        output = self.model(net_input, timesteps, return_dict=return_dict)
+        
+        if return_dict:
+            return output
+        else:
+            return output.sample
