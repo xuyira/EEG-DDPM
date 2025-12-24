@@ -10,9 +10,9 @@ class TrainingConfig:
     # 图像尺寸
     image_size: tuple = (64, 256)
     # 训练批次大小
-    train_batch_size: int = 16
+    train_batch_size: int = 2
     # 评估批次大小
-    eval_batch_size: int = 16
+    eval_batch_size: int = 2
     # 训练轮数
     num_epochs: int = 60
     # 梯度累积步数（累计几次梯度更新一次参数）
@@ -38,7 +38,7 @@ class TrainingConfig:
     unet_in_channels: int = 22  # 输入通道数（对应 EEG 通道数）
     unet_out_channels: int = 22  # 输出通道数
     unet_layers_per_block: int = 2  # 每个 UNet block 中的 ResNet 层数
-    unet_block_out_channels: tuple = (128, 128, 256, 256, 512, 512)  # 每个 UNet block 的输出通道数
+    unet_block_out_channels: tuple = (128, 256, 512)  # 每个 UNet block 的输出通道数
     
     # 数据相关
     data_root: Path = Path("./standard_2a_data")
@@ -54,8 +54,7 @@ class TrainingConfig:
     
     def __post_init__(self):
         if self.subjects is None:
-            self.subjects = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        
+            self.subjects = [1, 2, 3, 4, 5, 6, 7, 8, 9] 
         # 设置输出目录
         self.output_dir = str(Path(self.output_dir) / f"sub{self.leave_sub}")
         self.pic_dir = str(Path(self.pic_dir) / f"sub{self.leave_sub}")
