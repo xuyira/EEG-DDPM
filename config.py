@@ -8,7 +8,7 @@ import torch
 class TrainingConfig:
     """训练配置类"""
     # 图像尺寸
-    image_size: tuple = (64, 256)
+    image_size: tuple = (64, 64)
     # 训练批次大小
     train_batch_size: int = 16
     # 评估批次大小
