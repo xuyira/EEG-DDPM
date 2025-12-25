@@ -224,7 +224,7 @@ class ExP():
         self.nSub = nsub
 
         self.start_epoch = 0
-        self.root = '/Data/strict_TE/'
+        self.root = './data/standard_2a_data/'
 
         self.log_write = open("./results/log_subject%d.txt" % self.nSub, "w")
 
