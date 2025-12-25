@@ -6,7 +6,7 @@ standard_2a_data/
 *.ipynb
 EEG-Conformer/data/
 EEG-Conformer/results/
-EEG-Conformer/best_model_subject*.pth
+EEG-Conformer/*.pth
 
 
 # Byte-compiled / optimized / DLL files
