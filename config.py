@@ -22,8 +22,8 @@ class TrainingConfig:
     # 学习率衰减
     lr_warmup_steps: int = 500
     
-    save_image_epochs: int = 10
-    save_model_epochs: int = 20
+    save_image_epochs: int = 50  # 每多少个 epoch 评估一次并保存生成的图像
+    save_model_epochs: int = 20  # 每多少个 epoch 保存一次模型
     
     mixed_precision: str = "no"  # `no` for float32, `fp16` for automatic mixed precision
     output_dir: str = "./model_checkpoints/DDPM_oricond_3/"#模型保存目录
