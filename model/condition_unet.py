@@ -71,4 +71,5 @@ class ClassConditionedUnet(nn.Module):
         if return_dict:
             return output
         else:
-            return output.sample
+            # 当 return_dict=False 时，UNet2DModel 返回 tuple，取第一个元素
+            return output[0]

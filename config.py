@@ -26,7 +26,7 @@ class TrainingConfig:
     save_model_epochs: int = 20
     
     mixed_precision: str = "no"  # `no` for float32, `fp16` for automatic mixed precision
-    output_dir: str = "./model_checkpoints/DDPM/" #模型保存目录
+    output_dir: str = "./model_checkpoints/DDPM_oricond/" #模型保存目录
     # 是否上传模型到HF Hub
     push_to_hub: bool = False  # whether to upload the saved model to the HF Hub
     hub_model_id: str = "hibiscus/test_model"  # the name of the repository to create on the HF Hub
@@ -50,7 +50,7 @@ class TrainingConfig:
     embedding: int = 64
     
     # 输出目录
-    pic_dir: str = "./model_pic/DDPM/"
+    pic_dir: str = "./model_pic/DDPM_oricond/"
     
     def __post_init__(self):
         if self.subjects is None:
