@@ -217,7 +217,7 @@ class Conformer(nn.Sequential):
 class ExP():
     def __init__(self, nsub, total_sub=9):
         super(ExP, self).__init__()
-        self.batch_size = 128
+        self.batch_size = 72
         self.n_epochs = 1000  # LOSO模式：数据量增加，减少epoch避免过拟合
         self.c_dim = 4
         self.lr = 0.0002  # 学习率保持不变，Adam优化器对学习率不太敏感
