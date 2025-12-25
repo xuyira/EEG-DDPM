@@ -1,4 +1,4 @@
-name: timedp
+name: timedp-1
 channels:
   - nvidia
   - defaults
