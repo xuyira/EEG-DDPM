@@ -217,7 +217,7 @@ class Conformer(nn.Sequential):
 class ExP():
     def __init__(self, nsub, total_sub=9):
         super(ExP, self).__init__()
-        self.batch_size = 72
+        self.batch_size = 256
         self.n_epochs = 1000  # LOSO模式：数据量增加，减少epoch避免过拟合
         self.c_dim = 4
         self.lr = 0.0002  # 学习率保持不变，Adam优化器对学习率不太敏感
@@ -319,8 +319,10 @@ class ExP():
         self.allLabel = self.allLabel[shuffle_num]
 
         # Load test data: E data from all subjects except the test subject
+        # 对每个sub的每类数据，只取10%作为测试集
         test_data_list = []
         test_label_list = []
+        test_sample_ratio = 0.1  # 每类取10%的数据
 
         for subject_id in range(1, self.total_sub + 1):
             if subject_id == self.nSub:
@@ -338,13 +340,39 @@ class ExP():
             data = np.transpose(data, (2, 1, 0))
             data = np.expand_dims(data, axis=1)
             label = np.transpose(label)
+            label = label[0]  # 获取标签数组
 
-            test_data_list.append(data)
-            test_label_list.append(label[0])
+            # 对每个类别进行采样（每类取10%）
+            sampled_data_list = []
+            sampled_label_list = []
+            
+            for class_id in range(1, 5):  # 类别标签是 1-4
+                class_mask = (label == class_id)
+                class_indices = np.where(class_mask)[0]
+                
+                if len(class_indices) > 0:
+                    # 计算采样数量（至少1个，最多取10%）
+                    n_samples = max(1, int(len(class_indices) * test_sample_ratio))
+                    # 随机采样
+                    sampled_indices = np.random.choice(class_indices, size=n_samples, replace=False)
+                    
+                    sampled_data_list.append(data[sampled_indices])
+                    sampled_label_list.append(label[sampled_indices])
+                    
+                    print(f'  Sub{subject_id} 类别{class_id}: 原始{len(class_indices)}个样本，采样{n_samples}个样本')
+            
+            if len(sampled_data_list) > 0:
+                subject_test_data = np.concatenate(sampled_data_list, axis=0)
+                subject_test_label = np.concatenate(sampled_label_list, axis=0)
+                test_data_list.append(subject_test_data)
+                test_label_list.append(subject_test_label)
 
         # Concatenate test data
-        self.testData = np.concatenate(test_data_list, axis=0)
-        self.testLabel = np.concatenate(test_label_list, axis=0)
+        if len(test_data_list) > 0:
+            self.testData = np.concatenate(test_data_list, axis=0)
+            self.testLabel = np.concatenate(test_label_list, axis=0)
+        else:
+            raise ValueError("没有加载到任何测试数据")
 
         # Standardize based on training data statistics
         target_mean = np.mean(self.allData)
