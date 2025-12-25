@@ -1,39 +1,51 @@
 """
 评估脚本：使用训练好的模型对指定的 npy 文件进行预测
 
-对于 LOSO（留一测试）模型：
-- 如果模型是留 sub1 训练的，归一化使用 sub2-9 的训练数据
-- 如果模型是留 sub2 训练的，归一化使用 sub1,sub3-9 的训练数据
+单受试者模式：
+- 如果模型是 sub1 训练的，归一化使用 sub1 的训练数据（T 数据）
+- 如果模型是 sub2 训练的，归一化使用 sub2 的训练数据（T 数据）
 - 以此类推
 """
 import os
 import numpy as np
 import torch
-from conformer import Conformer, ExP
+import scipy.io
+from conformer_onesub import Conformer, ExP
 
 
-def evaluate_npy_file(npy_path, model_path, target_label=2, nsub=1):
+def evaluate_npy_file(npy_path, model_path, target_label=2, nsub=1, data_root=None):
     """
-    使用训练好的 LOSO 模型评估指定的 npy 文件
+    使用训练好的单受试者模型评估指定的 npy 文件
     
     参数:
         npy_path: npy 文件路径，格式为 (N, 1000, 22)
-        model_path: 训练好的模型权重路径（LOSO 模型，留 nsub 作为测试集）
+        model_path: 训练好的模型权重路径（单受试者模型，sub nsub 训练的）
         target_label: 真实标签（用于计算准确率）
-        nsub: 测试受试者编号（模型是留哪个受试者训练的）
-              例如：nsub=1 表示模型是留 sub1 训练的，归一化使用 sub2-9 的训练数据
+        nsub: 受试者编号（模型是哪个受试者训练的）
+              例如：nsub=1 表示模型是 sub1 训练的，归一化使用 sub1 的训练数据（T 数据）
+        data_root: 数据根目录，如果为 None，使用 ExP 的默认路径
     
     返回:
         accuracy: 准确率
         predictions: 预测结果
+        probabilities: 预测概率
+        true_labels: 真实标签
     """
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"使用设备: {device}")
     
-    # 1. 加载训练数据用于归一化（LOSO 方式：使用除了 nsub 之外的所有受试者的训练数据）
-    print(f"\n加载 LOSO 训练数据用于归一化（留 sub{nsub}，使用 sub{','.join([str(i) for i in range(1, 10) if i != nsub])} 的训练数据）...")
-    exp = ExP(nsub, total_sub=9)
+    # 1. 加载训练数据用于归一化（单受试者方式：使用 sub nsub 自己的训练数据 T）
+    print(f"\n加载单受试者训练数据用于归一化（sub{nsub} 的 T 数据）...")
+    
+    # 如果提供了 data_root，临时修改 ExP 的 root
+    if data_root is None:
+        exp = ExP(nsub)
+    else:
+        # 创建临时 ExP 实例并修改 root
+        exp = ExP(nsub)
+        exp.root = data_root
+    
     train_data, _, _, _ = exp.get_source_data()
     
     # 获取训练数据的均值和标准差（用于归一化测试数据）
@@ -42,7 +54,7 @@ def evaluate_npy_file(npy_path, model_path, target_label=2, nsub=1):
     print(f"训练数据统计:")
     print(f"  均值: {target_mean:.6f}")
     print(f"  标准差: {target_std:.6f}")
-    print(f"  数据来源: sub{','.join([str(i) for i in range(1, 10) if i != nsub])} 的训练数据")
+    print(f"  数据来源: sub{nsub} 的训练数据（T 数据）")
     
     # 2. 加载测试数据（npy 文件）
     print(f"\n加载测试数据: {npy_path}")
@@ -125,17 +137,18 @@ def evaluate_npy_file(npy_path, model_path, target_label=2, nsub=1):
     return accuracy, predictions.cpu().numpy(), probabilities.cpu().numpy(), true_labels.cpu().numpy()
 
 
-def train_and_evaluate(npy_path, target_label=2, nsub=1):
+def train_and_evaluate(npy_path, target_label=2, nsub=1, data_root=None):
     """
-    训练指定受试者的 LOSO 模型，然后评估指定的 npy 文件
+    训练指定受试者的单受试者模型，然后评估指定的 npy 文件
     
     参数:
         npy_path: npy 文件路径
         target_label: 真实标签
-        nsub: 测试受试者编号（留哪个受试者作为测试集）
+        nsub: 受试者编号（训练哪个受试者的模型）
+        data_root: 数据根目录
     """
     print("=" * 60)
-    print(f"训练 LOSO 模型（留 sub{nsub} 作为测试集）")
+    print(f"训练单受试者模型（sub{nsub}：T 数据训练，E 数据测试）")
     print("=" * 60)
     
     # 设置随机种子
@@ -146,7 +159,9 @@ def train_and_evaluate(npy_path, target_label=2, nsub=1):
     torch.cuda.manual_seed_all(seed_n)
     
     # 训练指定受试者的模型
-    exp = ExP(nsub=nsub, total_sub=9)
+    exp = ExP(nsub)
+    if data_root is not None:
+        exp.root = data_root
     bestAcc, averAcc, Y_true, Y_pred = exp.train()
     
     print(f"\n训练完成！最佳准确率: {bestAcc:.4f}")
@@ -162,7 +177,8 @@ def train_and_evaluate(npy_path, target_label=2, nsub=1):
         npy_path=npy_path,
         model_path=model_path,
         target_label=target_label,
-        nsub=nsub
+        nsub=nsub,
+        data_root=data_root
     )
     
     return accuracy, predictions, probabilities, true_labels
@@ -172,31 +188,40 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='评估 npy 文件（LOSO 模型）',
+        description='评估 npy 文件（单受试者模型）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例用法:
   # 使用已训练的 sub1 模型评估 eeg_label2.npy
-  python evaluate_npy.py --npy_path ../model_gen/DDPM_oricond/eeg_label2.npy \\
-                          --model_path best_model_subject1.pth \\
-                          --target_label 2 \\
-                          --nsub 1
+  python evaluate_npy_onesub.py --npy_path ../model_gen/DDPM_oricond/eeg_label2.npy \\
+                                 --model_path best_model_subject1.pth \\
+                                 --target_label 2 \\
+                                 --nsub 1
   
   # 先训练 sub1 模型，再评估
-  python evaluate_npy.py --npy_path ../model_gen/DDPM_oricond/eeg_label2.npy \\
-                          --target_label 2 \\
-                          --nsub 1 \\
-                          --train
+  python evaluate_npy_onesub.py --npy_path ../model_gen/DDPM_oricond/eeg_label2.npy \\
+                                 --target_label 2 \\
+                                 --nsub 1 \\
+                                 --train
+  
+  # 指定数据根目录
+  python evaluate_npy_onesub.py --npy_path ../model_gen/DDPM_oricond/eeg_label2.npy \\
+                                 --model_path best_model_subject1.pth \\
+                                 --target_label 2 \\
+                                 --nsub 1 \\
+                                 --data_root /Data/strict_TE/
         """
     )
     parser.add_argument('--npy_path', type=str, default='../model_gen/DDPM_oricond/eeg_label2.npy',
                         help='npy 文件路径，格式为 (N, 1000, 22)')
     parser.add_argument('--model_path', type=str, default='best_model_subject1.pth',
-                        help='模型权重路径（LOSO 模型）')
+                        help='模型权重路径（单受试者模型）')
     parser.add_argument('--target_label', type=int, default=2,
                         help='真实标签（用于计算准确率）')
     parser.add_argument('--nsub', type=int, default=1,
-                        help='测试受试者编号（模型是留哪个受试者训练的，归一化使用其他受试者的训练数据）')
+                        help='受试者编号（模型是哪个受试者训练的，归一化使用该受试者的训练数据 T）')
+    parser.add_argument('--data_root', type=str, default=None,
+                        help='数据根目录（如果为 None，使用 ExP 的默认路径）')
     parser.add_argument('--train', action='store_true',
                         help='是否先训练模型（如果模型不存在）')
     
@@ -208,19 +233,21 @@ if __name__ == "__main__":
             print("指定了 --train，将先训练模型...")
         else:
             print(f"模型文件不存在: {args.model_path}，将先训练模型...")
-        accuracy, predictions = train_and_evaluate(
+        accuracy, predictions, probabilities, true_labels = train_and_evaluate(
             npy_path=args.npy_path,
             target_label=args.target_label,
-            nsub=args.nsub
+            nsub=args.nsub,
+            data_root=args.data_root
         )
     else:
         # 直接评估
         print("使用已训练的模型进行评估...")
-        accuracy, predictions = evaluate_npy_file(
+        accuracy, predictions, probabilities, true_labels = evaluate_npy_file(
             npy_path=args.npy_path,
             model_path=args.model_path,
             target_label=args.target_label,
-            nsub=args.nsub
+            nsub=args.nsub,
+            data_root=args.data_root
         )
     
     print(f"\n" + "=" * 60)

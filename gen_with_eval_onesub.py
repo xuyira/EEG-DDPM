@@ -12,7 +12,7 @@ from diffusers import DDPMScheduler
 
 # 添加 EEG-Conformer 目录到路径
 sys.path.insert(0, str(Path(__file__).parent / "EEG-Conformer"))
-from evaluate_npy import evaluate_npy_file
+from evaluate_npy_onesub import evaluate_npy_file
 
 # 解析命令行参数
 parser = argparse.ArgumentParser(
@@ -37,7 +37,9 @@ parser.add_argument('--conformer_model_path', type=str,
                     default='EEG-Conformer/best_model_subject1.pth',
                     help='Conformer 模型权重路径，默认: EEG-Conformer/best_model_subject1.pth')
 parser.add_argument('--nsub', type=int, default=1,
-                    help='测试受试者编号（LOSO 方式，用于归一化），默认: 1')
+                    help='受试者编号（单受试者模式，使用该受试者的训练数据 T 进行归一化），默认: 1')
+parser.add_argument('--data_root', type=str, default=None,
+                    help='数据根目录（如果为 None，使用 ExP 的默认路径），默认: None')
 
 args = parser.parse_args()
 
@@ -122,7 +124,9 @@ nsub = args.nsub
 
 print(f"\n评估参数:")
 print(f"  Conformer 模型路径: {conformer_model_path}")
-print(f"  测试受试者编号: {nsub}")
+print(f"  受试者编号: {nsub} (单受试者模式，使用 sub{nsub} 的训练数据 T 进行归一化)")
+if args.data_root:
+    print(f"  数据根目录: {args.data_root}")
 
 if not os.path.exists(conformer_model_path):
     print(f"警告: Conformer 模型文件不存在: {conformer_model_path}")
@@ -133,7 +137,8 @@ else:
         npy_path=npy_path,
         model_path=conformer_model_path,
         target_label=target_label,
-        nsub=nsub
+        nsub=nsub,
+        data_root=args.data_root
     )
     
     # 创建 DataFrame
