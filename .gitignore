@@ -1,7 +1,7 @@
 model_checkpoints/
 model_pic/
-#model_gen/
-#results/
+model_gen/
+results/
 standard_2a_data/
 *.ipynb
 EEG-Conformer/data/
