@@ -508,7 +508,9 @@ class ExP():
 
         # 使用最优模型对测试数据进行预测并保存 Excel
         print(f'\n使用最优模型对测试数据进行最终预测...')
-        self.model.load_state_dict(torch.load('best_model_subject%d.pth' % self.nSub))
+        # 加载权重：因为保存时使用的是 self.model.module.state_dict()，所以加载时也要用 module
+        state_dict = torch.load('best_model_subject%d.pth' % self.nSub)
+        self.model.module.load_state_dict(state_dict)
         self.model.eval()
         
         with torch.no_grad():

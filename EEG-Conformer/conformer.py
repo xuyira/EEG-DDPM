@@ -146,10 +146,6 @@ class FeedForwardBlock(nn.Sequential):
         )
 
 
-class GELU(nn.Module):
-    def forward(self, input: Tensor) -> Tensor:
-        return input * 0.5 * (1.0 + torch.erf(input / math.sqrt(2.0)))
-
 
 class TransformerEncoderBlock(nn.Sequential):
     def __init__(self,
@@ -183,11 +179,6 @@ class ClassificationHead(nn.Sequential):
         super().__init__()
 
         # global average pooling
-        self.clshead = nn.Sequential(
-            Reduce('b n e -> b e', reduction='mean'),
-            nn.LayerNorm(emb_size),
-            nn.Linear(emb_size, n_classes)
-        )
         self.fc = nn.Sequential(
             nn.Linear(2440, 256),
             nn.ELU(),

@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from diffusers import DDPMPipeline
 from utils.data_preprocessing import DelayEmbedder
+from tqdm import tqdm
 
 def generate_eeg_for_label(config, model, noise_scheduler, target_label, n_samples, save_path):
     device = next(model.parameters()).device
@@ -20,11 +21,13 @@ def generate_eeg_for_label(config, model, noise_scheduler, target_label, n_sampl
     model.eval()
     with torch.no_grad():
         timesteps = noise_scheduler.timesteps.to(device)
-        for t in timesteps:
+        # 显示扩散过程的进度条
+        for t in tqdm(timesteps, desc=f"生成 {n_samples} 个样本 (扩散去噪)", unit="step"):
             noise_pred = model(sample, t, labels, return_dict=False)
             sample = noise_scheduler.step(noise_pred, t, sample).prev_sample
 
     # 4. 图像 -> 时间序列
+    print("正在将图像转换为时间序列...")
     images = sample.detach().cpu().permute(0, 2, 3, 1).numpy()  # (B,H,W,C) 如果你想复用 evaluate_conditional 下面那段，也可以先转成 (B,C,H,W)
     images_bchw = np.transpose(images, (0, 3, 1, 2))
     img_tensor = torch.from_numpy(images_bchw).float()

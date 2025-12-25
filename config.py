@@ -10,11 +10,11 @@ class TrainingConfig:
     # 图像尺寸
     image_size: tuple = (64, 64)
     # 训练批次大小
-    train_batch_size: int = 16
+    train_batch_size: int = 64
     # 评估批次大小
-    eval_batch_size: int = 16
+    eval_batch_size: int = 64
     # 训练轮数
-    num_epochs: int = 60
+    num_epochs: int = 500
     # 梯度累积步数（累计几次梯度更新一次参数）
     gradient_accumulation_steps: int = 1
     # 学习率
@@ -26,7 +26,7 @@ class TrainingConfig:
     save_model_epochs: int = 20
     
     mixed_precision: str = "no"  # `no` for float32, `fp16` for automatic mixed precision
-    output_dir: str = "./model_checkpoints/DDPM_oricond/" #模型保存目录
+    output_dir: str = "./model_checkpoints/DDPM_oricond_3/"#模型保存目录
     # 是否上传模型到HF Hub
     push_to_hub: bool = False  # whether to upload the saved model to the HF Hub
     hub_model_id: str = "hibiscus/test_model"  # the name of the repository to create on the HF Hub
@@ -50,11 +50,11 @@ class TrainingConfig:
     embedding: int = 64
     
     # 输出目录
-    pic_dir: str = "./model_pic/DDPM_oricond/"
+    pic_dir: str = "./model_pic/DDPM_oricond_3/"
     
     def __post_init__(self):
         if self.subjects is None:
-            self.subjects = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            self.subjects = [1, 3]
         
         # 设置输出目录
         self.output_dir = str(Path(self.output_dir) / f"sub{self.leave_sub}")
