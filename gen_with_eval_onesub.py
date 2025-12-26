@@ -20,13 +20,18 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog="""
 示例用法:
-  # 生成类别 2 的 100 条数据，使用 sub1 的模型评估
-  python gen_with_eval.py --target_label 2 --n_samples 100 --nsub 1
+  # 生成类别 2 的 100 条数据，使用 sub1 的模型评估（自动查找 checkpoint）
+  python gen_with_eval_onesub.py --target_label 2 --n_samples 100 --nsub 1
   
-  # 生成类别 3 的 200 条数据，使用自定义模型路径
-  python gen_with_eval.py --target_label 3 --n_samples 200 \\
-                          --conformer_model_path EEG-Conformer/best_model_subject1.pth \\
-                          --nsub 1
+  # 指定 checkpoint 文件
+  python gen_with_eval_onesub.py --target_label 2 --n_samples 100 --nsub 1 \\
+                                  --checkpoint model_checkpoints/DDPM_oricond_3/sub1/checkpoint_epoch_39.pt
+  
+  # 生成类别 3 的 200 条数据，使用自定义模型路径和 checkpoint
+  python gen_with_eval_onesub.py --target_label 3 --n_samples 200 \\
+                                  --conformer_model_path EEG-Conformer/best_model_subject1.pth \\
+                                  --nsub 1 \\
+                                  --checkpoint model_checkpoints/DDPM_oricond_3/sub1/checkpoint_epoch_59.pt
     """
 )
 parser.add_argument('--target_label', type=int, default=3,
@@ -40,6 +45,8 @@ parser.add_argument('--nsub', type=int, default=1,
                     help='受试者编号（单受试者模式，使用该受试者的训练数据 T 进行归一化），默认: 1')
 parser.add_argument('--data_root', type=str, default='EEG-Conformer/data/standard_2a_data/',
                     help='数据根目录，默认: EEG-Conformer/data/standard_2a_data/')
+parser.add_argument('--checkpoint', type=str, default=None,
+                    help='指定 checkpoint 文件路径（相对或绝对路径）。如果不指定，将尝试加载 checkpoint_epoch_59.pt，如果不存在则使用最新的 checkpoint')
 
 args = parser.parse_args()
 
@@ -59,18 +66,34 @@ model = ClassConditionedUnet(config, num_classes=num_classes, class_emb_size=cla
 model = model.to(device)
 
 # 加载训练好的模型权重
-# 请根据实际情况修改 checkpoint 路径
-checkpoint_path = os.path.join(config.output_dir, "checkpoint_epoch_59.pt")  # 修改为你的 checkpoint 文件名
-
-if not os.path.exists(checkpoint_path):
-    # 尝试查找最新的 checkpoint
-    checkpoint_dir = Path(config.output_dir)
-    checkpoints = list(checkpoint_dir.glob("checkpoint_epoch_*.pt"))
-    if checkpoints:
-        checkpoint_path = str(max(checkpoints, key=lambda p: p.stat().st_mtime))
-        print(f"找到最新的 checkpoint: {checkpoint_path}")
+if args.checkpoint:
+    # 如果用户指定了 checkpoint 路径
+    checkpoint_path = args.checkpoint
+    if not os.path.isabs(checkpoint_path):
+        # 如果是相对路径，相对于项目根目录
+        checkpoint_path = os.path.join(Path(__file__).parent, checkpoint_path)
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"指定的 checkpoint 文件不存在: {checkpoint_path}")
+    print(f"使用指定的 checkpoint: {checkpoint_path}")
+else:
+    # 自动查找 checkpoint
+    default_checkpoint = os.path.join(config.output_dir, "checkpoint_epoch_59.pt")
+    
+    if os.path.exists(default_checkpoint):
+        checkpoint_path = default_checkpoint
+        print(f"使用默认 checkpoint: {checkpoint_path}")
     else:
-        raise FileNotFoundError(f"未找到 checkpoint 文件，请检查路径: {config.output_dir}")
+        # 尝试查找最新的 checkpoint
+        checkpoint_dir = Path(config.output_dir)
+        checkpoints = list(checkpoint_dir.glob("checkpoint_epoch_*.pt"))
+        if checkpoints:
+            checkpoint_path = str(max(checkpoints, key=lambda p: p.stat().st_mtime))
+            print(f"未找到 checkpoint_epoch_59.pt，使用最新的 checkpoint: {checkpoint_path}")
+        else:
+            raise FileNotFoundError(
+                f"未找到 checkpoint 文件。请检查路径: {config.output_dir}\n"
+                f"或使用 --checkpoint 参数指定 checkpoint 路径"
+            )
 
 print(f"加载模型权重: {checkpoint_path}")
 checkpoint = torch.load(checkpoint_path, map_location=device)
