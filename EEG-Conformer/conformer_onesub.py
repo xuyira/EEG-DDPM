@@ -226,6 +226,8 @@ class ExP():
         self.start_epoch = 0
         self.root = './data/standard_2a_data/'
 
+        # 创建 results 目录（如果不存在）
+        os.makedirs("./results", exist_ok=True)
         self.log_write = open("./results/log_subject%d.txt" % self.nSub, "w")
 
 
