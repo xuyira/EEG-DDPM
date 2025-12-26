@@ -38,8 +38,8 @@ parser.add_argument('--conformer_model_path', type=str,
                     help='Conformer 模型权重路径，默认: EEG-Conformer/best_model_subject1.pth')
 parser.add_argument('--nsub', type=int, default=1,
                     help='受试者编号（单受试者模式，使用该受试者的训练数据 T 进行归一化），默认: 1')
-parser.add_argument('--data_root', type=str, default=None,
-                    help='数据根目录（如果为 None，使用 ExP 的默认路径），默认: None')
+parser.add_argument('--data_root', type=str, default='EEG-Conformer/data/standard_2a_data/',
+                    help='数据根目录，默认: EEG-Conformer/data/standard_2a_data/')
 
 args = parser.parse_args()
 
@@ -133,12 +133,18 @@ if not os.path.exists(conformer_model_path):
     print("跳过评估步骤")
 else:
     # 评估生成的数据
+    # 确保 data_root 路径正确（如果为 None，使用默认路径，并确保以 / 结尾）
+    if args.data_root:
+        data_root = args.data_root.rstrip('/') + '/'
+    else:
+        data_root = 'EEG-Conformer/data/standard_2a_data/'
+    
     accuracy, predictions, probabilities, true_labels = evaluate_npy_file(
         npy_path=npy_path,
         model_path=conformer_model_path,
         target_label=target_label,
         nsub=nsub,
-        data_root=args.data_root
+        data_root=data_root
     )
     
     # 创建 DataFrame
