@@ -20,7 +20,7 @@ class TrainingConfig:
     # 学习率
     learning_rate: float = 1e-4
     # 学习率衰减
-    lr_warmup_steps: int = 500
+    lr_warmup_steps: int = 1200
     
     save_image_epochs: int = 50
     save_model_epochs: int = 50
