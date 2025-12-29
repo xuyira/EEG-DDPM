@@ -14,6 +14,7 @@ import torch.nn.functional as F
 import gc
 from diffusers.optimization import get_cosine_schedule_with_warmup
 import numpy as np
+import pandas as pd
 
 from config import TrainingConfig
 from model.unet2dcond import create_unet2dcond_model
