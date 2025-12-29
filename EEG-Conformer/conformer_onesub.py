@@ -1,5 +1,5 @@
 """
-EEG Conformer 
+EEG Conformer
 
 Convolutional Transformer for EEG decoding
 
@@ -107,7 +107,7 @@ class MultiHeadAttention(nn.Module):
         queries = rearrange(self.queries(x), "b n (h d) -> b h n d", h=self.num_heads)
         keys = rearrange(self.keys(x), "b n (h d) -> b h n d", h=self.num_heads)
         values = rearrange(self.values(x), "b n (h d) -> b h n d", h=self.num_heads)
-        energy = torch.einsum('bhqd, bhkd -> bhqk', queries, keys)  
+        energy = torch.einsum('bhqd, bhkd -> bhqk', queries, keys)
         if mask is not None:
             fill_value = torch.finfo(torch.float32).min
             energy.mask_fill(~mask, fill_value)
@@ -178,7 +178,7 @@ class TransformerEncoder(nn.Sequential):
 class ClassificationHead(nn.Sequential):
     def __init__(self, emb_size, n_classes):
         super().__init__()
-        
+
         # global average pooling
         self.clshead = nn.Sequential(
             Reduce('b n e -> b e', reduction='mean'),
@@ -245,7 +245,7 @@ class ExP():
 
 
     # Segmentation and Reconstruction (S&R) data augmentation
-    def interaug(self, timg, label):  
+    def interaug(self, timg, label):
         aug_data = []
         aug_label = []
         for cls4aug in range(4):
@@ -364,7 +364,7 @@ class ExP():
 
                 tok, outputs = self.model(img)
 
-                loss = self.criterion_cls(outputs, label) 
+                loss = self.criterion_cls(outputs, label)
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -452,45 +452,45 @@ def main():
         # 循环模式：训练所有9个受试者
         best = 0
         aver = 0
-        result_write = open("./results/sub_result.txt", "w")
+    result_write = open("./results/sub_result.txt", "w")
 
         for i in range(9):
-            starttime = datetime.datetime.now()
+        starttime = datetime.datetime.now()
 
             seed_n = args.seed if args.seed is not None else np.random.randint(2021)
-            print('seed is ' + str(seed_n))
-            random.seed(seed_n)
-            np.random.seed(seed_n)
-            torch.manual_seed(seed_n)
-            torch.cuda.manual_seed(seed_n)
-            torch.cuda.manual_seed_all(seed_n)
+        print('seed is ' + str(seed_n))
+        random.seed(seed_n)
+        np.random.seed(seed_n)
+        torch.manual_seed(seed_n)
+        torch.cuda.manual_seed(seed_n)
+        torch.cuda.manual_seed_all(seed_n)
 
             print('Subject %d' % (i+1))
             exp = ExP(i + 1)
 
-            bestAcc, averAcc, Y_true, Y_pred = exp.train()
-            print('THE BEST ACCURACY IS ' + str(bestAcc))
-            result_write.write('Subject ' + str(i + 1) + ' : ' + 'Seed is: ' + str(seed_n) + "\n")
-            result_write.write('Subject ' + str(i + 1) + ' : ' + 'The best accuracy is: ' + str(bestAcc) + "\n")
-            result_write.write('Subject ' + str(i + 1) + ' : ' + 'The average accuracy is: ' + str(averAcc) + "\n")
+        bestAcc, averAcc, Y_true, Y_pred = exp.train()
+        print('THE BEST ACCURACY IS ' + str(bestAcc))
+        result_write.write('Subject ' + str(i + 1) + ' : ' + 'Seed is: ' + str(seed_n) + "\n")
+        result_write.write('Subject ' + str(i + 1) + ' : ' + 'The best accuracy is: ' + str(bestAcc) + "\n")
+        result_write.write('Subject ' + str(i + 1) + ' : ' + 'The average accuracy is: ' + str(averAcc) + "\n")
 
-            endtime = datetime.datetime.now()
+        endtime = datetime.datetime.now()
             print('subject %d duration: '%(i+1) + str(endtime - starttime))
-            best = best + bestAcc
-            aver = aver + averAcc
-            if i == 0:
-                yt = Y_true
-                yp = Y_pred
-            else:
-                yt = torch.cat((yt, Y_true))
-                yp = torch.cat((yp, Y_pred))
+        best = best + bestAcc
+        aver = aver + averAcc
+        if i == 0:
+            yt = Y_true
+            yp = Y_pred
+        else:
+            yt = torch.cat((yt, Y_true))
+            yp = torch.cat((yp, Y_pred))
 
-        best = best / 9
-        aver = aver / 9
+    best = best / 9
+    aver = aver / 9
 
-        result_write.write('**The average Best accuracy is: ' + str(best) + "\n")
-        result_write.write('The average Aver accuracy is: ' + str(aver) + "\n")
-        result_write.close()
+    result_write.write('**The average Best accuracy is: ' + str(best) + "\n")
+    result_write.write('The average Aver accuracy is: ' + str(aver) + "\n")
+    result_write.close()
     else:
         # 单受试者模式：只训练指定的受试者
         starttime = datetime.datetime.now()

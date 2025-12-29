@@ -297,17 +297,17 @@ class ExP():
             file_path = self.root + 'A0%dT.mat' % subject_id
             print(f'Loading training data (T): {file_path}')
 
-            data_mat = scipy.io.loadmat(file_path)
-            data = data_mat['data']
-            label = data_mat['label']
+                data_mat = scipy.io.loadmat(file_path)
+                data = data_mat['data']
+                label = data_mat['label']
 
-            # Transpose and expand dimensions
-            data = np.transpose(data, (2, 1, 0))
-            data = np.expand_dims(data, axis=1)
-            label = np.transpose(label)
+                # Transpose and expand dimensions
+                data = np.transpose(data, (2, 1, 0))
+                data = np.expand_dims(data, axis=1)
+                label = np.transpose(label)
 
-            train_data_list.append(data)
-            train_label_list.append(label[0])
+                train_data_list.append(data)
+                train_label_list.append(label[0])
 
         # Concatenate all training data
         self.allData = np.concatenate(train_data_list, axis=0)
@@ -369,8 +369,8 @@ class ExP():
 
         # Concatenate test data
         if len(test_data_list) > 0:
-            self.testData = np.concatenate(test_data_list, axis=0)
-            self.testLabel = np.concatenate(test_label_list, axis=0)
+        self.testData = np.concatenate(test_data_list, axis=0)
+        self.testLabel = np.concatenate(test_label_list, axis=0)
         else:
             raise ValueError("没有加载到任何测试数据")
 

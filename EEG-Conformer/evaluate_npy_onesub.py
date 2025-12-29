@@ -194,15 +194,15 @@ if __name__ == "__main__":
 示例用法:
   # 使用已训练的 sub1 模型评估 eeg_label2.npy
   python evaluate_npy_onesub.py --npy_path ../model_gen/DDPM_oricond/eeg_label2.npy \\
-                                 --model_path best_model_subject1.pth \\
-                                 --target_label 2 \\
-                                 --nsub 1
+                          --model_path best_model_subject1.pth \\
+                          --target_label 2 \\
+                          --nsub 1
   
   # 先训练 sub1 模型，再评估
   python evaluate_npy_onesub.py --npy_path ../model_gen/DDPM_oricond/eeg_label2.npy \\
-                                 --target_label 2 \\
-                                 --nsub 1 \\
-                                 --train
+                          --target_label 2 \\
+                          --nsub 1 \\
+                          --train
   
   # 指定数据根目录
   python evaluate_npy_onesub.py --npy_path ../model_gen/DDPM_oricond/eeg_label2.npy \\
