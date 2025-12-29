@@ -26,6 +26,7 @@ class TrainingConfig:
     save_model_epochs: int = 20
     
     mixed_precision: str = "no"  # `no` for float32, `fp16` for automatic mixed precision
+    log_with: str = "wandb"  # 日志工具：'wandb' 或 'tensorboard'，默认使用 wandb
     output_dir: str = "./model_checkpoints/DDPM_attencond/" #模型保存目录
     # 是否上传模型到HF Hub
     push_to_hub: bool = False  # whether to upload the saved model to the HF Hub

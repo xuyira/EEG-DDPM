@@ -163,11 +163,11 @@ def train_loop_conditional(
     import os
     from pathlib import Path
     
-    # 初始化 accelerator
+    # 初始化 accelerator（支持 wandb 或 tensorboard）
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
-        log_with="tensorboard",
+        log_with=config.log_with,  # 从 config 读取，可以是 "wandb" 或 "tensorboard"
         project_dir=os.path.join(config.output_dir, "logs"),
     )
     
