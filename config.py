@@ -23,7 +23,7 @@ class TrainingConfig:
     lr_warmup_steps: int = 500
     
     save_image_epochs: int = 50
-    save_model_epochs: int = 20
+    save_model_epochs: int = 50
     
     mixed_precision: str = "no"  # `no` for float32, `fp16` for automatic mixed precision
     log_with: str = "wandb"  # 日志工具：'wandb' 或 'tensorboard'，默认使用 wandb

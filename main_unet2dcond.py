@@ -300,21 +300,32 @@ def train_loop_conditional(
                 config, epoch, pic_dir, num_classes, device
             )
         
-        # 保存模型
+        # 保存模型（按 epoch 保存，不覆盖）
         if accelerator.is_main_process and ((epoch + 1) % config.save_model_epochs == 0 or epoch == config.num_epochs - 1):
             unwrapped_model = accelerator.unwrap_model(model)
             unwrapped_unet = unwrapped_model.unet
             unwrapped_label_embedder = unwrapped_model.label_embedder
             
-            # 保存模型
-            save_dir = Path(config.output_dir)
-            save_dir.mkdir(parents=True, exist_ok=True)
+            # 保存模型（按 epoch 保存）
+            base_save_dir = Path(config.output_dir)
+            base_save_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 创建 epoch 特定的保存目录
+            epoch_save_dir = base_save_dir / f"epoch_{epoch:04d}"
+            epoch_save_dir.mkdir(parents=True, exist_ok=True)
             
             # 保存 UNet
-            unwrapped_unet.save_pretrained(save_dir / "unet")
+            unet_save_dir = epoch_save_dir / "unet"
+            unwrapped_unet.save_pretrained(unet_save_dir)
             # 保存 label_embedder
-            torch.save(unwrapped_label_embedder.state_dict(), save_dir / "label_embedder.pt")
-            print(f"模型已保存到 {save_dir}")
+            torch.save(unwrapped_label_embedder.state_dict(), epoch_save_dir / "label_embedder.pt")
+            print(f"模型已保存到 {epoch_save_dir}")
+            
+            # 同时保存到 latest 目录（方便快速访问最新模型）
+            latest_save_dir = base_save_dir / "latest"
+            latest_save_dir.mkdir(parents=True, exist_ok=True)
+            unwrapped_unet.save_pretrained(latest_save_dir / "unet")
+            torch.save(unwrapped_label_embedder.state_dict(), latest_save_dir / "label_embedder.pt")
 
 
 def generate_conditional_samples(unet, label_embedder, noise_scheduler, config, epoch, pic_dir, num_classes, device):
