@@ -198,6 +198,14 @@ def train_loop_conditional(
     
     global_step = 0
     
+    # 用于记录训练历史（用于绘制曲线）
+    training_history = {
+        "step": [],
+        "loss": [],
+        "lr": [],
+        "epoch": []
+    }
+    
     # 训练循环
     for epoch in range(config.num_epochs):
         progress_bar = tqdm(total=len(train_dataloader), disable=not accelerator.is_local_main_process)
@@ -261,7 +269,22 @@ def train_loop_conditional(
             }
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
+            
+            # 记录训练历史（用于绘制曲线和保存到文件）
+            if accelerator.is_main_process:
+                training_history["step"].append(global_step)
+                training_history["loss"].append(loss.detach().item())
+                training_history["lr"].append(lr_scheduler.get_last_lr()[0])
+                training_history["epoch"].append(epoch)
+            
             global_step += 1
+        
+        # 每个 epoch 后保存训练历史并绘制曲线
+        if accelerator.is_main_process and ((epoch + 1) % config.save_image_epochs == 0 or epoch == config.num_epochs - 1):
+            # 保存训练历史到 CSV 文件
+            save_training_history(training_history, config.output_dir, epoch)
+            # 绘制并保存 loss 曲线
+            plot_training_curves(training_history, config.output_dir, epoch)
         
         # 每个 epoch 后可选地生成一些样本图像
         if accelerator.is_main_process and ((epoch + 1) % config.save_image_epochs == 0 or epoch == config.num_epochs - 1):
@@ -412,6 +435,92 @@ def generate_conditional_samples(unet, label_embedder, noise_scheduler, config, 
     
     unet.train()
     label_embedder.train()
+
+
+def save_training_history(training_history, output_dir, current_epoch):
+    """
+    保存训练历史到 CSV 文件
+    
+    参数:
+        training_history: 包含 step, loss, lr, epoch 的字典
+        output_dir: 输出目录
+        current_epoch: 当前 epoch
+    """
+    try:
+        # 创建 DataFrame
+        df = pd.DataFrame(training_history)
+        
+        # 保存到 CSV
+        csv_path = Path(output_dir) / "training_history.csv"
+        df.to_csv(csv_path, index=False)
+        
+        # 每 10 个 epoch 打印一次保存信息
+        if current_epoch % 10 == 0:
+            print(f"训练历史已保存到: {csv_path} (共 {len(df)} 条记录)")
+    except Exception as e:
+        print(f"保存训练历史失败: {e}")
+
+
+def plot_training_curves(training_history, output_dir, current_epoch):
+    """
+    绘制并保存训练曲线（loss 和 learning rate）
+    
+    参数:
+        training_history: 包含 step, loss, lr, epoch 的字典
+        output_dir: 输出目录
+        current_epoch: 当前 epoch
+    """
+    try:
+        if len(training_history["step"]) == 0:
+            return
+        
+        # 创建图表
+        fig, axes = plt.subplots(2, 1, figsize=(12, 8))
+        
+        steps = training_history["step"]
+        losses = training_history["loss"]
+        lrs = training_history["lr"]
+        epochs = training_history["epoch"]
+        
+        # 图1: Loss 曲线
+        ax1 = axes[0]
+        ax1.plot(steps, losses, 'b-', alpha=0.6, linewidth=0.5, label='Loss')
+        
+        # 计算移动平均（每 100 个点平均）
+        if len(losses) > 100:
+            window_size = min(100, len(losses) // 10)
+            moving_avg = pd.Series(losses).rolling(window=window_size, center=True).mean()
+            ax1.plot(steps, moving_avg, 'r-', linewidth=2, label=f'Moving Average (window={window_size})')
+        
+        ax1.set_xlabel('Step')
+        ax1.set_ylabel('Loss')
+        ax1.set_title(f'Training Loss (Epoch {current_epoch + 1})')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # 图2: Learning Rate 曲线
+        ax2 = axes[1]
+        ax2.plot(steps, lrs, 'g-', alpha=0.6, linewidth=0.5, label='Learning Rate')
+        ax2.set_xlabel('Step')
+        ax2.set_ylabel('Learning Rate')
+        ax2.set_title('Learning Rate Schedule')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        ax2.set_yscale('log')  # 使用对数刻度
+        
+        plt.tight_layout()
+        
+        # 保存图片
+        plot_path = Path(output_dir) / "training_curves.png"
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # 每 10 个 epoch 打印一次保存信息
+        if current_epoch % 10 == 0:
+            print(f"训练曲线已保存到: {plot_path}")
+            
+    except Exception as e:
+        print(f"绘制训练曲线失败: {e}")
 
 
 if __name__ == "__main__":
