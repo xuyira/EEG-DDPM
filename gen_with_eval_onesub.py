@@ -10,25 +10,67 @@ from config import TrainingConfig
 from model.unet2dcond import create_unet2dcond_model
 from diffusers import DDPMScheduler
 
-def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_samples, save_path):
+def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_samples, save_path, gen_batch_size=None):
+    """
+    生成指定类别的 EEG 数据
+    
+    参数:
+        config: TrainingConfig 配置对象
+        unet: UNet 模型
+        noise_scheduler: 噪声调度器
+        target_label: 目标类别标签
+        n_samples: 要生成的样本总数
+        save_path: 保存路径
+        gen_batch_size: 生成时的 batch size（如果为 None，则一次性生成所有样本）
+    """
     device = next(unet.parameters()).device
+    
+    # 如果没有指定 gen_batch_size，则一次性生成所有样本
+    if gen_batch_size is None:
+        gen_batch_size = n_samples
+    
+    # 确保 gen_batch_size 不超过 n_samples
+    gen_batch_size = min(gen_batch_size, n_samples)
+    
+    print(f"生成配置: 总样本数={n_samples}, batch_size={gen_batch_size}")
 
-    # 1. 构造标签
-    labels = torch.full((n_samples,), int(target_label), dtype=torch.long, device=device)
-
-    # 2. 初始化噪声
-    shape = (n_samples, config.unet_in_channels, *config.image_size)
-    sample = torch.randn(shape, device=device)
-
-    # 3. 走反向扩散（使用类别嵌入方式）
+    # 计算需要多少个 batch
+    n_batches = (n_samples + gen_batch_size - 1) // gen_batch_size
+    
+    all_samples = []
+    
     unet.eval()
     with torch.no_grad():
-        timesteps = noise_scheduler.timesteps.to(device)
-        # 显示扩散过程的进度条
-        for t in tqdm(timesteps, desc=f"生成 {n_samples} 个样本 (扩散去噪)", unit="step"):
-            timestep_tensor = torch.full((n_samples,), t, dtype=torch.long, device=device)
-            noise_pred = unet(sample, timestep_tensor, class_labels=labels, encoder_hidden_states=None).sample
-            sample = noise_scheduler.step(noise_pred, t, sample).prev_sample
+        # 分批生成
+        for batch_idx in range(n_batches):
+            # 计算当前 batch 的大小
+            start_idx = batch_idx * gen_batch_size
+            end_idx = min(start_idx + gen_batch_size, n_samples)
+            current_batch_size = end_idx - start_idx
+            
+            print(f"\n生成 batch {batch_idx + 1}/{n_batches} (样本 {start_idx + 1}-{end_idx})...")
+            
+            # 1. 构造标签
+            labels = torch.full((current_batch_size,), int(target_label), dtype=torch.long, device=device)
+
+            # 2. 初始化噪声
+            shape = (current_batch_size, config.unet_in_channels, *config.image_size)
+            sample = torch.randn(shape, device=device)
+
+            # 3. 走反向扩散（使用类别嵌入方式）
+            timesteps = noise_scheduler.timesteps.to(device)
+            # 显示扩散过程的进度条
+            for t in tqdm(timesteps, desc=f"  扩散去噪 (batch {batch_idx + 1}/{n_batches})", unit="step", leave=False):
+                timestep_tensor = torch.full((current_batch_size,), t, dtype=torch.long, device=device)
+                noise_pred = unet(sample, timestep_tensor, class_labels=labels, encoder_hidden_states=None).sample
+                sample = noise_scheduler.step(noise_pred, t, sample).prev_sample
+            
+            # 保存当前 batch 的结果
+            all_samples.append(sample.cpu())
+    
+    # 合并所有 batch 的结果
+    print(f"\n合并 {n_batches} 个 batch 的结果...")
+    sample = torch.cat(all_samples, dim=0)  # (n_samples, C, H, W)
 
     # 4. 图像 -> 时间序列
     print("正在将图像转换为时间序列...")
@@ -76,21 +118,25 @@ parser = argparse.ArgumentParser(
   # 生成类别 2 的 100 条数据，使用 sub1 的模型评估（自动查找 checkpoint）
   python gen_with_eval_onesub.py --target_label 2 --n_samples 100 --nsub 1
   
-  # 指定 checkpoint 文件
+  # 指定 checkpoint 文件，使用 batch_size=16 分批生成（节省显存）
   python gen_with_eval_onesub.py --target_label 2 --n_samples 100 --nsub 1 \\
-                                  --checkpoint model_checkpoints/DDPM_oricond_3/sub1/checkpoint_epoch_39.pt
+                                  --checkpoint model_checkpoints/DDPM_oricond_3/sub1/checkpoint_epoch_39.pt \\
+                                  --gen_batch_size 16
   
-  # 生成类别 3 的 200 条数据，使用自定义模型路径和 checkpoint
+  # 生成类别 3 的 200 条数据，使用自定义模型路径和 checkpoint，分批生成
   python gen_with_eval_onesub.py --target_label 3 --n_samples 200 \\
                                   --conformer_model_path EEG-Conformer/best_model_subject1.pth \\
                                   --nsub 1 \\
-                                  --checkpoint model_checkpoints/DDPM_oricond_3/sub1/checkpoint_epoch_59.pt
+                                  --checkpoint model_checkpoints/DDPM_oricond_3/sub1/checkpoint_epoch_59.pt \\
+                                  --gen_batch_size 32
     """
 )
 parser.add_argument('--target_label', type=int, default=3,
                     help='想要生成的类别标签 (0-3)，默认: 3')
 parser.add_argument('--n_samples', type=int, default=100,
                     help='想生成多少条数据，默认: 100')
+parser.add_argument('--gen_batch_size', type=int, default=None,
+                    help='生成时的 batch size（用于节省显存）。如果为 None，则一次性生成所有样本。默认: None')
 parser.add_argument('--conformer_model_path', type=str, 
                     default='EEG-Conformer/best_model_subject1.pth',
                     help='Conformer 模型权重路径，默认: EEG-Conformer/best_model_subject1.pth')
@@ -190,6 +236,7 @@ save_dir.mkdir(parents=True, exist_ok=True)
 # 从命令行参数获取生成参数
 target_label = args.target_label
 n_samples = args.n_samples
+gen_batch_size = args.gen_batch_size
 npy_path = str(save_dir / f"eeg_label{target_label}.npy")
 
 # 验证参数
@@ -197,10 +244,16 @@ if target_label < 0 or target_label > 3:
     raise ValueError(f"target_label 必须在 0-3 之间，得到: {target_label}")
 if n_samples <= 0:
     raise ValueError(f"n_samples 必须大于 0，得到: {n_samples}")
+if gen_batch_size is not None and gen_batch_size <= 0:
+    raise ValueError(f"gen_batch_size 必须大于 0，得到: {gen_batch_size}")
 
 print(f"\n生成参数:")
 print(f"  目标类别: {target_label}")
 print(f"  生成样本数: {n_samples}")
+if gen_batch_size is not None:
+    print(f"  生成 batch size: {gen_batch_size}")
+else:
+    print(f"  生成 batch size: 一次性生成所有样本 ({n_samples})")
 
 # 生成指定类别的 EEG 数据
 print(f"\n{'='*60}")
@@ -212,7 +265,8 @@ generate_eeg_for_label(
     noise_scheduler,
     target_label=target_label,
     n_samples=n_samples,
-    save_path=npy_path
+    save_path=npy_path,
+    gen_batch_size=gen_batch_size
 )
 
 # 使用 Conformer 模型评估生成的数据
