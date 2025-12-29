@@ -226,11 +226,32 @@ def train_loop_conditional(
                 loss = F.mse_loss(noise_pred, noise)
                 accelerator.backward(loss)
                 
+                # 调试：检查 LabelEmbedder 是否在训练（只在训练初期检查一次）
+                if step == 0 and epoch == 0:
+                    from check_label_embedding import check_label_embedder_training, check_embedding_differences
+                    unwrapped_model = accelerator.unwrap_model(model)
+                    unwrapped_label_embedder = unwrapped_model.label_embedder
+                    
+                    # 检查是否在优化器中
+                    check_label_embedder_training(unwrapped_model, optimizer)
+                    
+                    # 检查 embedding 差异（初始状态）
+                    print("\n[初始状态] 检查 LabelEmbedder 的初始 embedding:")
+                    check_embedding_differences(unwrapped_label_embedder, num_classes, device=accelerator.device)
+                
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
+                
+                # 调试：检查训练后的 embedding 差异（每50个epoch检查一次）
+                if step == len(train_dataloader) - 1 and (epoch + 1) % 50 == 0:
+                    from check_label_embedding import check_embedding_differences
+                    unwrapped_model = accelerator.unwrap_model(model)
+                    unwrapped_label_embedder = unwrapped_model.label_embedder
+                    print(f"\n[训练后 - Epoch {epoch}] 检查 LabelEmbedder 的 embedding:")
+                    check_embedding_differences(unwrapped_label_embedder, num_classes, device=accelerator.device)
             
             progress_bar.update(1)
             logs = {
