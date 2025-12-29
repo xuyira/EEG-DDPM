@@ -39,22 +39,8 @@ class TrainingConfig:
     unet_out_channels: int = 22  # 输出通道数
     unet_layers_per_block: int = 2  # 每个 UNet block 中的 ResNet 层数
     unet_block_out_channels: tuple = (64, 128, 256, 256)  # 每个 UNet block 的输出通道数
-    
-    # 条件嵌入参数
-    # 类别嵌入方式（与时间嵌入结合）
-    class_embed_type: str = "timestep"  # 类别嵌入类型：None, "timestep", "identity", "projection", "simple_projection"
-                                        # "timestep": 类别嵌入与时间嵌入相加（推荐）
-                                        # "identity": 类别嵌入直接使用
-                                        # "projection": 需要 projection_class_embeddings_input_dim
-    num_class_embeds: int = 4  # 类别数量（用于创建可学习的类别嵌入矩阵）
-    projection_class_embeddings_input_dim: int = None  # 当 class_embed_type="projection" 时，class_labels 输入的维度
-    class_embeddings_concat: bool = False  # 是否将时间嵌入与类别嵌入拼接（False 表示相加）
-    
-    # 交叉注意力参数（可选，可以与类别嵌入同时使用）
-    use_cross_attention: bool = False  # 是否使用交叉注意力层
-    cross_attention_dim: int = 256  # 交叉注意力维度（当 use_cross_attention=True 时使用）
-    encoder_hid_dim: int = 128  # encoder_hidden_states 的维度（当 use_cross_attention=True 时使用）
-    encoder_hid_dim_type: str = "text_proj"  # encoder_hid_dim_type: None, 'text_proj' 或 'text_image_proj'
+    cross_attention_dim: int = 256  # 交叉注意力维度（K, V 的维度）
+    encoder_hid_dim: int = 256  # 条件的维度
 
     
     # 数据相关

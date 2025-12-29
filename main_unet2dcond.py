@@ -85,15 +85,12 @@ def main():
     plt.savefig(f"{config.pic_dir}/sample_transpic_trial{show_trial}_channel{show_channel}.png", dpi=300)
     plt.close()
     
-    # 创建条件模型
-    print("\n创建条件模型...")
+    # 创建条件模型（使用交叉注意力）
+    print("\n创建条件模型（交叉注意力方式）...")
     num_classes = len(np.unique(X_train_label))  # 自动检测类别数量
-    # 更新 config 中的类别数量
-    config.num_class_embeds = num_classes
-    print(f"类别数量: {num_classes}, 类别嵌入类型: {config.class_embed_type}, 拼接方式: {config.class_embeddings_concat}")
-    print(f"使用交叉注意力: {config.use_cross_attention}")
+    print(f"类别数量: {num_classes}, 交叉注意力维度: {config.cross_attention_dim}, encoder_hid_dim: {config.encoder_hid_dim}")
     
-    unet = create_unet2dcond_model(
+    unet, label_embedder = create_unet2dcond_model(
         config, 
         num_classes=num_classes
     )
@@ -103,17 +100,17 @@ def main():
     sample_label = torch.tensor([X_train_label[0]], dtype=torch.long)
     sample_timestep = torch.tensor([0], dtype=torch.long)
     
-    # 测试 UNet 输出
+    # 测试 UNet 输出（使用交叉注意力）
     with torch.no_grad():
-        if config.use_cross_attention:
-            # 如果使用交叉注意力，需要提供 encoder_hidden_states
-            # 这里先用 None 测试，实际使用时需要提供真实的 encoder_hidden_states
-            output = unet(sample_image, sample_timestep, class_labels=sample_label, encoder_hidden_states=None).sample
-        else:
-            # 只使用类别嵌入，不需要 encoder_hidden_states
-            output = unet(sample_image, sample_timestep, class_labels=sample_label, encoder_hidden_states=None).sample
+        # 将标签转换为 embedding
+        cond_emb = label_embedder(sample_label)  # (1, encoder_hid_dim)
+        # 扩展维度以匹配 UNet 的期望输入 (B, seq_len, encoder_hid_dim)
+        cond_emb = cond_emb.unsqueeze(1).repeat(1, 4, 1)  # (1, 4, encoder_hid_dim)
+        
+        output = unet(sample_image, sample_timestep, encoder_hidden_states=cond_emb).sample
         print("输入图像维度：", sample_image.shape)
         print("输入标签：", sample_label)
+        print("条件嵌入维度：", cond_emb.shape)
         print("输出维度：", output.shape)
         
     # 创建数据集和数据加载器
@@ -127,9 +124,9 @@ def main():
     # 创建噪声调度器
     noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
     
-    # 创建优化器和学习率调度器（只需要优化 UNet，类别嵌入在 UNet 内部）
+    # 创建优化器和学习率调度器（需要同时优化 UNet 和 label_embedder）
     optimizer = torch.optim.AdamW(
-        unet.parameters(), 
+        list(unet.parameters()) + list(label_embedder.parameters()), 
         lr=config.learning_rate
     )
     lr_scheduler = get_cosine_schedule_with_warmup(
@@ -143,6 +140,7 @@ def main():
     train_loop_conditional(
         config=config,
         unet=unet,
+        label_embedder=label_embedder,
         noise_scheduler=noise_scheduler,
         optimizer=optimizer,
         train_dataloader=train_dataloader,
@@ -156,10 +154,10 @@ def main():
 
 
 def train_loop_conditional(
-    config, unet, noise_scheduler, optimizer, 
+    config, unet, label_embedder, noise_scheduler, optimizer, 
     train_dataloader, lr_scheduler, pic_dir, device, num_classes
 ):
-    """条件训练循环（使用类别嵌入方式）"""
+    """条件训练循环（使用交叉注意力方式）"""
     from accelerate import Accelerator
     from tqdm.auto import tqdm
     import os
@@ -178,8 +176,22 @@ def train_loop_conditional(
             os.makedirs(config.output_dir, exist_ok=True)
         accelerator.init_trackers("train_conditional")
     
-    # 准备模型和数据加载器（不需要包装类，直接使用 UNet）
-    model = unet
+    # 将 unet 和 label_embedder 组合成一个模型
+    class ConditionalModel(torch.nn.Module):
+        def __init__(self, unet, label_embedder):
+            super().__init__()
+            self.unet = unet
+            self.label_embedder = label_embedder
+        
+        def forward(self, noisy_images, timesteps, labels):
+            # 将标签转换为 embedding
+            cond_emb = self.label_embedder(labels)  # (B, encoder_hid_dim)
+            # 扩展维度以匹配 UNet 的期望输入 (B, seq_len, encoder_hid_dim)
+            cond_emb = cond_emb.unsqueeze(1).repeat(1, 4, 1)  # (B, 4, encoder_hid_dim)
+            # 使用交叉注意力
+            return self.unet(noisy_images, timesteps, encoder_hidden_states=cond_emb).sample
+    
+    model = ConditionalModel(unet, label_embedder)
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
@@ -209,8 +221,8 @@ def train_loop_conditional(
             noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
             
             with accelerator.accumulate(model):
-                # 预测噪声残差（使用类别标签，encoder_hidden_states 设为 None）
-                noise_pred = model(noisy_images, timesteps, class_labels=labels, encoder_hidden_states=None).sample
+                # 预测噪声残差（使用交叉注意力，将 labels 转换为 embedding）
+                noise_pred = model(noisy_images, timesteps, labels)
                 loss = F.mse_loss(noise_pred, noise)
                 accelerator.backward(loss)
                 
@@ -233,33 +245,40 @@ def train_loop_conditional(
         # 每个 epoch 后可选地生成一些样本图像
         if accelerator.is_main_process and ((epoch + 1) % config.save_image_epochs == 0 or epoch == config.num_epochs - 1):
             # 解包模型
-            unwrapped_unet = accelerator.unwrap_model(model)
+            unwrapped_model = accelerator.unwrap_model(model)
+            unwrapped_unet = unwrapped_model.unet
+            unwrapped_label_embedder = unwrapped_model.label_embedder
             
             # 生成样本（为每个类别生成一个样本）
             generate_conditional_samples(
-                unwrapped_unet, noise_scheduler, 
+                unwrapped_unet, unwrapped_label_embedder, noise_scheduler, 
                 config, epoch, pic_dir, num_classes, device
             )
         
         # 保存模型
         if accelerator.is_main_process and ((epoch + 1) % config.save_model_epochs == 0 or epoch == config.num_epochs - 1):
-            unwrapped_unet = accelerator.unwrap_model(model)
+            unwrapped_model = accelerator.unwrap_model(model)
+            unwrapped_unet = unwrapped_model.unet
+            unwrapped_label_embedder = unwrapped_model.label_embedder
             
             # 保存模型
             save_dir = Path(config.output_dir)
             save_dir.mkdir(parents=True, exist_ok=True)
             
-            # 保存 UNet（类别嵌入已包含在 UNet 内部）
+            # 保存 UNet
             unwrapped_unet.save_pretrained(save_dir / "unet")
+            # 保存 label_embedder
+            torch.save(unwrapped_label_embedder.state_dict(), save_dir / "label_embedder.pt")
             print(f"模型已保存到 {save_dir}")
 
 
-def generate_conditional_samples(unet, noise_scheduler, config, epoch, pic_dir, num_classes, device):
+def generate_conditional_samples(unet, label_embedder, noise_scheduler, config, epoch, pic_dir, num_classes, device):
     """生成条件样本，并输出两种图：
     1）图片域（按类别排列的生成图像）
     2）时间域 EEG（通过 DelayEmbedder.img_to_ts 还原）
     """
     unet.eval()
+    label_embedder.eval()
     
     # 为每个类别生成样本
     images_per_class = config.eval_batch_size // num_classes
@@ -274,14 +293,19 @@ def generate_conditional_samples(unet, noise_scheduler, config, epoch, pic_dir, 
             # 创建标签
             labels = torch.full((images_per_class,), class_id, dtype=torch.long, device=device)
             
+            # 将标签转换为 embedding
+            cond_emb = label_embedder(labels)  # (B, encoder_hid_dim)
+            # 扩展维度以匹配 UNet 的期望输入 (B, seq_len, encoder_hid_dim)
+            cond_emb = cond_emb.unsqueeze(1).repeat(1, 4, 1)  # (B, 4, encoder_hid_dim)
+            
             # 生成随机噪声
             shape = (images_per_class, config.unet_in_channels, *config.image_size)
             noisy_images = torch.randn(shape, device=device)
             
-            # 反向扩散过程（使用 class_labels，encoder_hidden_states 设为 None）
+            # 反向扩散过程（使用交叉注意力）
             for t in noise_scheduler.timesteps:
                 timesteps = torch.full((images_per_class,), t, dtype=torch.long, device=device)
-                noise_pred = unet(noisy_images, timesteps, class_labels=labels, encoder_hidden_states=None).sample
+                noise_pred = unet(noisy_images, timesteps, encoder_hidden_states=cond_emb).sample
                 noisy_images = noise_scheduler.step(noise_pred, t, noisy_images).prev_sample
             
             all_images.append(noisy_images.cpu().numpy())
@@ -366,6 +390,7 @@ def generate_conditional_samples(unet, noise_scheduler, config, epoch, pic_dir, 
         print(f"基于 img_to_ts 的 EEG 信号可视化失败: {e}")
     
     unet.train()
+    label_embedder.train()
 
 
 if __name__ == "__main__":
