@@ -10,9 +10,9 @@ class TrainingConfig:
     # 图像尺寸
     image_size: tuple = (64, 64)
     # 训练批次大小
-    train_batch_size: int = 128
+    train_batch_size: int = 64
     # 评估批次大小
-    eval_batch_size: int = 128
+    eval_batch_size: int = 64
     # 训练轮数
     num_epochs: int = 500
     # 梯度累积步数（累计几次梯度更新一次参数）
