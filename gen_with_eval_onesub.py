@@ -70,8 +70,19 @@ def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_sample
                 timestep_tensor = torch.full((current_batch_size,), t, dtype=torch.long, device=device)
                 
                 if unconditional:
-                    # 无条件生成：不传入任何条件
-                    noise_pred = unet(sample, timestep_tensor, encoder_hidden_states=None).sample
+                    # 无条件生成：使用占位符 embedding 来模拟无条件
+                    if label_embedder is not None:
+                        # 如果使用交叉注意力，创建全零的占位符 embedding
+                        # 形状与条件生成时相同: (B, seq_len, encoder_hid_dim)
+                        placeholder_emb = torch.zeros(
+                            (current_batch_size, 4, config.encoder_hid_dim), 
+                            device=device, 
+                            dtype=sample.dtype
+                        )
+                        noise_pred = unet(sample, timestep_tensor, encoder_hidden_states=placeholder_emb).sample
+                    else:
+                        # 如果不使用交叉注意力，不传入 class_labels（或传入 None）
+                        noise_pred = unet(sample, timestep_tensor, class_labels=None, encoder_hidden_states=None).sample
                 else:
                     # 条件生成：根据是否使用交叉注意力选择不同的调用方式
                     if label_embedder is not None:
