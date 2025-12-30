@@ -10,18 +10,20 @@ from config import TrainingConfig
 from model.unet2dcond import create_unet2dcond_model
 from diffusers import DDPMScheduler
 
-def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_samples, save_path, gen_batch_size=None, label_embedder=None):
+def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_samples, save_path, gen_batch_size=None, label_embedder=None, unconditional=False):
     """
-    生成指定类别的 EEG 数据
+    生成指定类别的 EEG 数据（条件生成）或无条件生成
     
     参数:
         config: TrainingConfig 配置对象
         unet: UNet 模型
         noise_scheduler: 噪声调度器
-        target_label: 目标类别标签
+        target_label: 目标类别标签（无条件生成时忽略）
         n_samples: 要生成的样本总数
         save_path: 保存路径
         gen_batch_size: 生成时的 batch size（如果为 None，则一次性生成所有样本）
+        label_embedder: LabelEmbedder（条件生成时使用）
+        unconditional: 是否进行无条件生成（True=无条件，False=条件生成）
     """
     device = next(unet.parameters()).device
     
@@ -32,7 +34,10 @@ def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_sample
     # 确保 gen_batch_size 不超过 n_samples
     gen_batch_size = min(gen_batch_size, n_samples)
     
-    print(f"生成配置: 总样本数={n_samples}, batch_size={gen_batch_size}")
+    if unconditional:
+        print(f"生成配置: 无条件生成, 总样本数={n_samples}, batch_size={gen_batch_size}")
+    else:
+        print(f"生成配置: 条件生成 (类别 {target_label}), 总样本数={n_samples}, batch_size={gen_batch_size}")
 
     # 计算需要多少个 batch
     n_batches = (n_samples + gen_batch_size - 1) // gen_batch_size
@@ -50,8 +55,9 @@ def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_sample
             
             print(f"\n生成 batch {batch_idx + 1}/{n_batches} (样本 {start_idx + 1}-{end_idx})...")
             
-            # 1. 构造标签
-            labels = torch.full((current_batch_size,), int(target_label), dtype=torch.long, device=device)
+            # 1. 构造标签（仅条件生成时使用）
+            if not unconditional:
+                labels = torch.full((current_batch_size,), int(target_label), dtype=torch.long, device=device)
 
             # 2. 初始化噪声
             shape = (current_batch_size, config.unet_in_channels, *config.image_size)
@@ -63,16 +69,20 @@ def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_sample
             for t in tqdm(timesteps, desc=f"  扩散去噪 (batch {batch_idx + 1}/{n_batches})", unit="step", leave=False):
                 timestep_tensor = torch.full((current_batch_size,), t, dtype=torch.long, device=device)
                 
-                # 根据是否使用交叉注意力选择不同的调用方式
-                if label_embedder is not None:
-                    # 使用交叉注意力：将标签转换为 embedding
-                    cond_emb = label_embedder(labels)  # (B, encoder_hid_dim)
-                    # 扩展维度以匹配 UNet 的期望输入 (B, seq_len, encoder_hid_dim)
-                    cond_emb = cond_emb.unsqueeze(1).repeat(1, 4, 1)  # (B, 4, encoder_hid_dim)
-                    noise_pred = unet(sample, timestep_tensor, encoder_hidden_states=cond_emb).sample
+                if unconditional:
+                    # 无条件生成：不传入任何条件
+                    noise_pred = unet(sample, timestep_tensor, encoder_hidden_states=None).sample
                 else:
-                    # 使用类别嵌入：直接传入 class_labels
-                    noise_pred = unet(sample, timestep_tensor, class_labels=labels, encoder_hidden_states=None).sample
+                    # 条件生成：根据是否使用交叉注意力选择不同的调用方式
+                    if label_embedder is not None:
+                        # 使用交叉注意力：将标签转换为 embedding
+                        cond_emb = label_embedder(labels)  # (B, encoder_hid_dim)
+                        # 扩展维度以匹配 UNet 的期望输入 (B, seq_len, encoder_hid_dim)
+                        cond_emb = cond_emb.unsqueeze(1).repeat(1, 4, 1)  # (B, 4, encoder_hid_dim)
+                        noise_pred = unet(sample, timestep_tensor, encoder_hidden_states=cond_emb).sample
+                    else:
+                        # 使用类别嵌入：直接传入 class_labels
+                        noise_pred = unet(sample, timestep_tensor, class_labels=labels, encoder_hidden_states=None).sample
                 
                 sample = noise_scheduler.step(noise_pred, t, sample).prev_sample
             
@@ -113,7 +123,10 @@ def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_sample
     # 5. 保存到本地
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     np.save(save_path, ts_np)
-    print(f"已为类别 {target_label} 生成 {n_samples} 条 EEG 数据，形状: {ts_np.shape}")
+    if unconditional:
+        print(f"已无条件生成 {n_samples} 条 EEG 数据，形状: {ts_np.shape}")
+    else:
+        print(f"已为类别 {target_label} 生成 {n_samples} 条 EEG 数据，形状: {ts_np.shape}")
     print(f"已保存到: {save_path}")
 
 # 添加 EEG-Conformer 目录到路径
@@ -140,14 +153,21 @@ parser = argparse.ArgumentParser(
                                   --nsub 1 \\
                                   --checkpoint model_checkpoints/DDPM_oricond_3/sub1/checkpoint_epoch_59.pt \\
                                   --gen_batch_size 32
+  
+  # 无条件生成 100 条数据（不指定类别）
+  python gen_with_eval_onesub.py --unconditional --n_samples 100 --nsub 1 \\
+                                  --checkpoint model_checkpoints/DDPM_attencond/sub1/latest/unet \\
+                                  --gen_batch_size 16
     """
 )
 parser.add_argument('--target_label', type=int, default=3,
-                    help='想要生成的类别标签 (0-3)，默认: 3')
+                    help='想要生成的类别标签 (0-3)，默认: 3（无条件生成时忽略）')
 parser.add_argument('--n_samples', type=int, default=100,
                     help='想生成多少条数据，默认: 100')
 parser.add_argument('--gen_batch_size', type=int, default=None,
                     help='生成时的 batch size（用于节省显存）。如果为 None，则一次性生成所有样本。默认: None')
+parser.add_argument('--unconditional', action='store_true',
+                    help='是否进行无条件生成（不指定类别）。如果设置此选项，将忽略 --target_label 参数')
 parser.add_argument('--conformer_model_path', type=str, 
                     default='EEG-Conformer/best_model_subject1.pth',
                     help='Conformer 模型权重路径，默认: EEG-Conformer/best_model_subject1.pth')
@@ -293,45 +313,63 @@ save_dir = Path("./model_gen/DDPM_oricond")
 save_dir.mkdir(parents=True, exist_ok=True)
 
 # 从命令行参数获取生成参数
-target_label = args.target_label
+unconditional = args.unconditional
+target_label = args.target_label if not unconditional else None
 n_samples = args.n_samples
 gen_batch_size = args.gen_batch_size
-npy_path = str(save_dir / f"eeg_label{target_label}.npy")
+
+# 根据是否无条件生成设置保存路径
+if unconditional:
+    npy_path = str(save_dir / f"eeg_unconditional.npy")
+else:
+    npy_path = str(save_dir / f"eeg_label{target_label}.npy")
 
 # 验证参数
-if target_label < 0 or target_label > 3:
-    raise ValueError(f"target_label 必须在 0-3 之间，得到: {target_label}")
+if not unconditional:
+    if target_label < 0 or target_label > 3:
+        raise ValueError(f"target_label 必须在 0-3 之间，得到: {target_label}")
 if n_samples <= 0:
     raise ValueError(f"n_samples 必须大于 0，得到: {n_samples}")
 if gen_batch_size is not None and gen_batch_size <= 0:
     raise ValueError(f"gen_batch_size 必须大于 0，得到: {gen_batch_size}")
 
 print(f"\n生成参数:")
-print(f"  目标类别: {target_label}")
+if unconditional:
+    print(f"  生成模式: 无条件生成")
+else:
+    print(f"  生成模式: 条件生成")
+    print(f"  目标类别: {target_label}")
 print(f"  生成样本数: {n_samples}")
 if gen_batch_size is not None:
     print(f"  生成 batch size: {gen_batch_size}")
 else:
     print(f"  生成 batch size: 一次性生成所有样本 ({n_samples})")
 
-# 生成指定类别的 EEG 数据
+# 生成 EEG 数据
 print(f"\n{'='*60}")
-print(f"生成类别 {target_label} 的 EEG 数据")
+if unconditional:
+    print(f"无条件生成 EEG 数据")
+else:
+    print(f"生成类别 {target_label} 的 EEG 数据")
 print(f"{'='*60}")
 generate_eeg_for_label(
     config,
     unet,
     noise_scheduler,
-    target_label=target_label,
+    target_label=target_label if not unconditional else 0,  # 无条件生成时传入占位值
     n_samples=n_samples,
     save_path=npy_path,
     gen_batch_size=gen_batch_size,
-    label_embedder=label_embedder
+    label_embedder=label_embedder,
+    unconditional=unconditional
 )
 
 # 使用 Conformer 模型评估生成的数据
 print(f"\n{'='*60}")
-print(f"使用 Conformer 模型评估生成的数据")
+if unconditional:
+    print(f"使用 Conformer 模型评估无条件生成的数据（查看类别分布）")
+else:
+    print(f"使用 Conformer 模型评估生成的数据")
 print(f"{'='*60}")
 
 # 从命令行参数获取评估参数
@@ -355,26 +393,64 @@ else:
     else:
         data_root = 'EEG-Conformer/data/standard_2a_data/'
     
-    accuracy, predictions, probabilities, true_labels = evaluate_npy_file(
-        npy_path=npy_path,
-        model_path=conformer_model_path,
-        target_label=target_label,
-        nsub=nsub,
-        data_root=data_root
-    )
-    
-    # 创建 DataFrame
-    results_df = pd.DataFrame({
-        '真实标签': true_labels,
-        '预测标签': predictions,
-        '预测为类0的概率': probabilities[:, 0],
-        '预测为类1的概率': probabilities[:, 1],
-        '预测为类2的概率': probabilities[:, 2],
-        '预测为类3的概率': probabilities[:, 3]
-    })
-    
-    # 保存为 Excel 文件
-    excel_path = str(save_dir / f"evaluation_results_label{target_label}.xlsx")
-    results_df.to_excel(excel_path, index=False, engine='openpyxl')
-    print(f"\n评估结果已保存到: {excel_path}")
-    print(f"准确率: {accuracy:.4f} ({accuracy*100:.2f}%)")
+    if unconditional:
+        # 无条件生成：只进行预测，不计算准确率
+        accuracy, predictions, probabilities, _ = evaluate_npy_file(
+            npy_path=npy_path,
+            model_path=conformer_model_path,
+            target_label=0,  # 占位值，不会被使用
+            nsub=nsub,
+            data_root=data_root
+        )
+        
+        # 创建 DataFrame（不包含真实标签）
+        results_df = pd.DataFrame({
+            '预测标签': predictions,
+            '预测为类0的概率': probabilities[:, 0],
+            '预测为类1的概率': probabilities[:, 1],
+            '预测为类2的概率': probabilities[:, 2],
+            '预测为类3的概率': probabilities[:, 3]
+        })
+        
+        # 保存为 Excel 文件
+        excel_path = str(save_dir / f"evaluation_results_unconditional.xlsx")
+        results_df.to_excel(excel_path, index=False, engine='openpyxl')
+        print(f"\n评估结果已保存到: {excel_path}")
+        
+        # 打印类别分布（不打印准确率）
+        total = len(predictions)
+        unique_preds, counts = np.unique(predictions, return_counts=True)
+        print(f"\n预测类别分布:")
+        for pred_class, count in zip(unique_preds, counts):
+            print(f"  类别 {pred_class}: {count} 个样本 ({count/total*100:.2f}%)")
+        
+        # 打印平均概率
+        print(f"\n平均预测概率:")
+        for cls in range(4):
+            avg_prob = probabilities[:, cls].mean()
+            print(f"  类别 {cls}: {avg_prob:.4f} ({avg_prob*100:.2f}%)")
+    else:
+        # 条件生成：计算准确率
+        accuracy, predictions, probabilities, true_labels = evaluate_npy_file(
+            npy_path=npy_path,
+            model_path=conformer_model_path,
+            target_label=target_label,
+            nsub=nsub,
+            data_root=data_root
+        )
+        
+        # 创建 DataFrame
+        results_df = pd.DataFrame({
+            '真实标签': true_labels,
+            '预测标签': predictions,
+            '预测为类0的概率': probabilities[:, 0],
+            '预测为类1的概率': probabilities[:, 1],
+            '预测为类2的概率': probabilities[:, 2],
+            '预测为类3的概率': probabilities[:, 3]
+        })
+        
+        # 保存为 Excel 文件
+        excel_path = str(save_dir / f"evaluation_results_label{target_label}.xlsx")
+        results_df.to_excel(excel_path, index=False, engine='openpyxl')
+        print(f"\n评估结果已保存到: {excel_path}")
+        print(f"准确率: {accuracy:.4f} ({accuracy*100:.2f}%)")
