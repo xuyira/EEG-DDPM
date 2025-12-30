@@ -70,30 +70,19 @@ def generate_eeg_for_label(config, unet, noise_scheduler, target_label, n_sample
                 timestep_tensor = torch.full((current_batch_size,), t, dtype=torch.long, device=device)
                 
                 if unconditional:
-                    # 无条件生成：使用占位符 embedding 来模拟无条件
-                    if label_embedder is not None:
-                        # 如果使用交叉注意力，创建全零的占位符 embedding
-                        # 形状与条件生成时相同: (B, seq_len, encoder_hid_dim)
-                        placeholder_emb = torch.zeros(
-                            (current_batch_size, 4, config.encoder_hid_dim), 
-                            device=device, 
-                            dtype=sample.dtype
-                        )
-                        noise_pred = unet(sample, timestep_tensor, encoder_hidden_states=placeholder_emb).sample
-                    else:
-                        # 如果不使用交叉注意力，不传入 class_labels（或传入 None）
-                        noise_pred = unet(sample, timestep_tensor, class_labels=None, encoder_hidden_states=None).sample
+                    # 无条件生成：使用全零占位符 embedding
+                    placeholder_emb = torch.zeros(
+                        (current_batch_size, 4, config.encoder_hid_dim), 
+                        device=device, 
+                        dtype=sample.dtype
+                    )
+                    noise_pred = unet(sample, timestep_tensor, encoder_hidden_states=placeholder_emb).sample
                 else:
-                    # 条件生成：根据是否使用交叉注意力选择不同的调用方式
-                    if label_embedder is not None:
-                        # 使用交叉注意力：将标签转换为 embedding
-                        cond_emb = label_embedder(labels)  # (B, encoder_hid_dim)
-                        # 扩展维度以匹配 UNet 的期望输入 (B, seq_len, encoder_hid_dim)
-                        cond_emb = cond_emb.unsqueeze(1).repeat(1, 4, 1)  # (B, 4, encoder_hid_dim)
-                        noise_pred = unet(sample, timestep_tensor, encoder_hidden_states=cond_emb).sample
-                    else:
-                        # 使用类别嵌入：直接传入 class_labels
-                        noise_pred = unet(sample, timestep_tensor, class_labels=labels, encoder_hidden_states=None).sample
+                    # 条件生成：将标签转换为 embedding
+                    cond_emb = label_embedder(labels)  # (B, encoder_hid_dim)
+                    # 扩展维度以匹配 UNet 的期望输入 (B, seq_len, encoder_hid_dim)
+                    cond_emb = cond_emb.unsqueeze(1).repeat(1, 4, 1)  # (B, 4, encoder_hid_dim)
+                    noise_pred = unet(sample, timestep_tensor, encoder_hidden_states=cond_emb).sample
                 
                 sample = noise_scheduler.step(noise_pred, t, sample).prev_sample
             
@@ -242,17 +231,12 @@ else:
 # 加载模型
 print(f"加载模型: {model_path}")
 
-# 检查模型是否使用交叉注意力
-use_cross_attention = False
-label_embedder = None
-
 if model_path.endswith('.pt'):
     # 旧的 checkpoint 格式：需要先创建模型结构，再加载权重
     print("检测到旧格式 checkpoint，创建模型结构...")
     unet, label_embedder = create_unet2dcond_model(config, num_classes=num_classes)
     unet = unet.to(device)
     label_embedder = label_embedder.to(device)
-    use_cross_attention = True
     
     checkpoint = torch.load(model_path, map_location=device)
     if 'model_state_dict' in checkpoint:
@@ -276,44 +260,28 @@ if model_path.endswith('.pt'):
 else:
     # 新的 save_pretrained 格式：直接加载
     from diffusers import UNet2DConditionModel
-    import json
-    
-    # 检查 config.json 判断是否使用交叉注意力
-    config_json_path = Path(model_path) / "config.json"
-    if config_json_path.exists():
-        with open(config_json_path, 'r') as f:
-            model_config = json.load(f)
-            # 检查是否有 cross_attention_dim（表示使用了交叉注意力）
-            if 'cross_attention_dim' in model_config and model_config['cross_attention_dim'] is not None:
-                use_cross_attention = True
-                print(f"✓ 检测到模型使用交叉注意力 (cross_attention_dim={model_config['cross_attention_dim']})")
     
     unet = UNet2DConditionModel.from_pretrained(model_path)
     unet = unet.to(device)
     
-    # 如果使用交叉注意力，需要创建并加载 LabelEmbedder
-    if use_cross_attention:
-        # 检查是否有保存的 LabelEmbedder
-        label_embedder_path = Path(model_path).parent / "label_embedder.pt"
-        if label_embedder_path.exists():
-            from model.unet2dcond import LabelEmbedder
-            label_embedder = LabelEmbedder(num_classes=num_classes, emb_dim=config.encoder_hid_dim)
-            label_embedder.load_state_dict(torch.load(label_embedder_path, map_location=device))
-            label_embedder = label_embedder.to(device)
-            print(f"✓ LabelEmbedder 从 {label_embedder_path} 加载完成")
-        else:
-            print(f"⚠ 警告: 未找到 LabelEmbedder 权重文件 ({label_embedder_path})")
-            print("   将创建新的 LabelEmbedder（使用随机初始化）")
-            from model.unet2dcond import LabelEmbedder
-            label_embedder = LabelEmbedder(num_classes=num_classes, emb_dim=config.encoder_hid_dim)
-            label_embedder = label_embedder.to(device)
+    # 加载 LabelEmbedder
+    label_embedder_path = Path(model_path).parent / "label_embedder.pt"
+    if label_embedder_path.exists():
+        from model.unet2dcond import LabelEmbedder
+        label_embedder = LabelEmbedder(num_classes=num_classes, emb_dim=config.encoder_hid_dim)
+        label_embedder.load_state_dict(torch.load(label_embedder_path, map_location=device))
+        label_embedder = label_embedder.to(device)
+        print(f"✓ LabelEmbedder 从 {label_embedder_path} 加载完成")
+    else:
+        print(f"⚠ 警告: 未找到 LabelEmbedder 权重文件 ({label_embedder_path})")
+        print("   将创建新的 LabelEmbedder（使用随机初始化）")
+        from model.unet2dcond import LabelEmbedder
+        label_embedder = LabelEmbedder(num_classes=num_classes, emb_dim=config.encoder_hid_dim)
+        label_embedder = label_embedder.to(device)
 
 unet.eval()
-if label_embedder is not None:
-    label_embedder.eval()
-    print(f"✓ 模型使用交叉注意力，LabelEmbedder 已加载")
-else:
-    print(f"✓ 模型不使用交叉注意力（使用类别嵌入）")
+label_embedder.eval()
+print("✓ 模型和 LabelEmbedder 已加载")
 print("模型加载完成！")
 
 # 创建噪声调度器（需要与训练时一致）
